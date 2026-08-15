@@ -1,16 +1,20 @@
 /**
- * DOM enhancer: puts the image-support + reasoning-level controls INSIDE the
- * capacity disclosure (modelAdvanced) of each model row in the official Models
- * settings editor (the pi-ai provider card's model list). The official editor
+ * DOM enhancer: puts the image-support + reasoning-level controls INSIDE each
+ * model entry in the official Models settings editor (the pi-ai provider card's
+ * model list), as a sibling of the capacity disclosure so the block spans the
+ * full row width (matching the model's id + display-name row above) instead of
+ * being constrained to the disclosure's half-width grid. The official editor
  * declares no extension slot, so the enhancer watches the document, detects
- * rows structurally (locale-independent), and appends one capability block into
- * the row's capacity disclosure.
+ * rows structurally (locale-independent), and appends one capability block to
+ * each model entry.
  *
- * Because the block lives inside the capacity disclosure, the row's chevron
- * button collapses/expands the capacity fields AND the capability controls
- * together as one region, and the region is collapsed by default (the official
- * disclosure starts collapsed). While collapsed the disclosure is not in the
- * DOM, so nothing is injected until the user expands it.
+ * Because the block lives inside the same modelEntry as the capacity
+ * disclosure, and the enhancer mirrors the disclosure's open/closed state on
+ * the block, the row's chevron button collapses/expands capacity fields AND
+ * the capability controls together as one region, and the region is collapsed
+ * by default (the official disclosure starts collapsed). While collapsed the
+ * disclosure's content is not in the DOM, so the block is hidden until the
+ * user expands it.
  *
  * React owns the row markup, so the enhancer is re-runnable: every sweep
  * (re)creates missing blocks and syncs existing ones from the committed
@@ -63,23 +67,31 @@ export function sweepOnce(controller: ModelCapabilityController, t: Translator):
     if (provider === undefined) return
     const index = provider.models.findIndex((model) => String(model['id'] ?? '') === modelId)
     if (index < 0) return
-    // The capability block lives INSIDE the capacity disclosure (modelAdvanced),
-    // so the row's chevron collapses/expands capacity + capabilities together and
-    // the whole region stays collapsed by default. When collapsed, modelAdvanced
-    // is not in the DOM, so there is nothing to inject into until it expands.
+    // The capability block lives inside modelEntry — a sibling of modelAdvanced —
+    // so it spans the full row width (matching the model's id + display-name row
+    // above) instead of being constrained to the disclosure's half-width grid.
+    // When collapsed, modelAdvanced is not in the DOM; mirror that on any
+    // existing block so the chevron keeps hiding both regions together.
     const advanced = findAdvanced(modelEntry, modelRow)
-    if (advanced === undefined) return
-    ensureBlock(controller, t, advanced, provider, index)
+    const block = modelEntry.querySelector(':scope > [' + BLOCK_ATTR + ']') as HTMLElement | null
+    if (advanced === undefined) {
+      if (block !== null) block.hidden = true
+      return
+    }
+    ensureBlock(controller, t, modelEntry, advanced, provider, index)
   })
 }
 
 /**
  * The capacity disclosure of a row: the modelEntry child that holds the numeric
  * capacity inputs (context window / max tokens). Present only while expanded.
+ * The injected capability block is skipped: it carries checkbox labels that
+ * would otherwise satisfy the label fallback.
  */
 function findAdvanced(modelEntry: HTMLElement, modelRow: HTMLElement): HTMLElement | undefined {
   for (const child of Array.from(modelEntry.children)) {
     if (!(child instanceof HTMLElement) || child === modelRow) continue
+    if (child.hasAttribute(BLOCK_ATTR)) continue
     // The disclosure holds the numeric capacity inputs; a label fallback covers
     // builds that structure the capacity fields as labeled fields.
     if (child.querySelector('input[inputmode="numeric"]') !== null) return child
@@ -114,9 +126,9 @@ function resolveProvider(controller: ModelCapabilityController, from: HTMLElemen
   return undefined
 }
 
-/** Ensure the capacity disclosure carries a capability block for this provider/index. */
-function ensureBlock(controller: ModelCapabilityController, t: Translator, advanced: HTMLElement, provider: CapabilityProvider, index: number): void {
-  let block = advanced.querySelector(':scope > [' + BLOCK_ATTR + ']') as HTMLElement | null
+/** Ensure the model entry carries a capability block for this provider/index. */
+function ensureBlock(controller: ModelCapabilityController, t: Translator, modelEntry: HTMLElement, advanced: HTMLElement, provider: CapabilityProvider, index: number): void {
+  let block = modelEntry.querySelector(':scope > [' + BLOCK_ATTR + ']') as HTMLElement | null
   if (block !== null) {
     const stale = block.getAttribute('data-mp-provider') !== provider.provider
       || block.getAttribute('data-mp-index') !== String(index)
@@ -127,8 +139,11 @@ function ensureBlock(controller: ModelCapabilityController, t: Translator, advan
   }
   if (block === null) {
     block = buildRowControls(controller, t)
-    advanced.appendChild(block)
+    modelEntry.appendChild(block)
   }
+  // In-DOM disclosure means expanded (collapsed content is unmounted), so the
+  // block mirrors the disclosure's visibility: the chevron hides both together.
+  block.hidden = advanced.hidden
   block.setAttribute('data-mp-provider', provider.provider)
   block.setAttribute('data-mp-index', String(index))
   syncRowControls(controller, block, provider, index)

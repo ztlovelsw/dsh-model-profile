@@ -8,9 +8,10 @@ import type { Translator } from '../src/client/enhance.ts'
 
 /**
  * A faithful slice of the official Models editor DOM: one provider editor card
- * holding one model row, whose capacity disclosure (modelAdvanced) carries the
- * numeric capacity inputs. The capability block must be injected INTO that
- * disclosure so the chevron collapses/expands capacity + capabilities together.
+ * holding one model entry, whose capacity disclosure (modelAdvanced) carries
+ * the numeric capacity inputs. The capability block is injected as a SIBLING of
+ * that disclosure (inside the model entry) so it spans the full row width, and
+ * mirrors the disclosure's open/closed state so the chevron collapses both.
  */
 function buildEditorDom(opts: { expanded: boolean }): void {
   const editor = document.createElement('div')
@@ -118,7 +119,7 @@ function fakeApi() {
 const t: Translator = ((key: string) => key) as Translator
 
 describe('models-editor injection (capacity disclosure)', () => {
-  it('injects the block INTO the capacity disclosure when expanded', async () => {
+  it('injects the block as a disclosure sibling (full row width) when expanded', async () => {
     document.body.innerHTML = ''
     const { api } = fakeApi()
     const controller = new ModelCapabilityController(api as never)
@@ -129,8 +130,10 @@ describe('models-editor injection (capacity disclosure)', () => {
     const advanced = document.querySelector('[data-test-advanced]')!
     const block = document.querySelector('[data-mp-block]')
     expect(block).not.toBeNull()
-    // The block must be a child of the capacity disclosure.
-    expect(block!.parentElement).toBe(advanced)
+    // The block must live in the model entry, next to the capacity disclosure.
+    expect(block!.parentElement).toBe(advanced.parentElement)
+    expect(advanced.parentElement!.contains(advanced)).toBe(true)
+    expect(block!.hidden).toBe(false)
     expect(block!.getAttribute('data-mp-provider')).toBe('router9')
     expect(block!.getAttribute('data-mp-index')).toBe('0')
     // Values synced from the stored entry.
@@ -150,7 +153,34 @@ describe('models-editor injection (capacity disclosure)', () => {
     expect(document.querySelector('[data-mp-block]')).toBeNull()
   })
 
-  it('writes input on image select change (block inside disclosure)', async () => {
+  it('hides an existing block once the disclosure is collapsed again', async () => {
+    document.body.innerHTML = ''
+    const { api } = fakeApi()
+    const controller = new ModelCapabilityController(api as never)
+    await controller.load()
+    buildEditorDom({ expanded: true })
+    sweepOnce(controller, t)
+    const block = document.querySelector('[data-mp-block]')!
+    expect(block.hidden).toBe(false)
+
+    // Collapse: React unmounts the disclosure; the next sweep mirrors that.
+    document.querySelector('[data-test-advanced]')!.remove()
+    sweepOnce(controller, t)
+    expect(block.hidden).toBe(true)
+
+    // Expand again: the disclosure returns and the block is restored.
+    const entry = document.querySelector('section > div')!
+    const advanced = document.createElement('div')
+    advanced.setAttribute('data-test-advanced', '')
+    const capInput = document.createElement('input')
+    capInput.setAttribute('inputmode', 'numeric')
+    advanced.appendChild(capInput)
+    entry.appendChild(advanced)
+    sweepOnce(controller, t)
+    expect(block.hidden).toBe(false)
+  })
+
+  it('writes input on image select change (block beside disclosure)', async () => {
     document.body.innerHTML = ''
     const { api, mutateCalls } = fakeApi()
     const controller = new ModelCapabilityController(api as never)

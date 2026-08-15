@@ -4,12 +4,24 @@
 .block {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin-top: 10px;
-  padding: 10px 12px;
+  gap: 10px;
+  margin-top: 4px;
+  padding: 12px 14px;
   border: 1px dashed var(--dsw-alias-border-l2);
   border-radius: 8px;
   background: var(--dsw-alias-bg-layer-3);
+  width: 100%;
+  box-sizing: border-box;
+  /* The block is a sibling of modelAdvanced inside modelEntry, which is a
+     4-column CSS grid (1.4fr 1fr auto auto). Span every column so the
+     capability region matches the full width of the model's id + display-name
+     row above. */
+  grid-column: 1 / -1;
+}
+
+/* The flex declaration above would otherwise defeat the hidden attribute. */
+.block[hidden] {
+  display: none;
 }
 
 .title {
@@ -19,17 +31,23 @@
 }
 
 .row {
-  display: flex;
-  gap: 16px;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px 16px;
+  width: 100%;
+}
+
+@media (max-width: 640px) {
+  .row {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .field {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  min-width: 190px;
-  flex: 1;
+  min-width: 0;
 }
 
 .label {
@@ -46,7 +64,8 @@
   font-size: 13px;
   color: var(--dsw-alias-label-primary);
   background: var(--dsw-specific-input-major);
-  max-width: 320px;
+  width: 100%;
+  box-sizing: border-box;
   transition: border-color 120ms ease, box-shadow 120ms ease;
 }
 
@@ -60,10 +79,12 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 8px 10px;
+  padding: 10px 12px;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 8px;
   background: var(--dsw-alias-bg-layer-2);
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .hint {
@@ -81,7 +102,8 @@
 .level {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+  width: 100%;
 }
 
 .levelCheck {
@@ -89,7 +111,7 @@
   align-items: center;
   gap: 6px;
   flex: 0 0 auto;
-  min-width: 150px;
+  min-width: 140px;
   font-size: 13px;
   color: var(--dsw-alias-label-primary);
 }
