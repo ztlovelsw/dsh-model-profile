@@ -196,8 +196,19 @@ describe('models-editor injection (capacity disclosure)', () => {
 
     expect(mutateCalls.length).toBe(1)
     const op = mutateCalls[0].ops[0] as { op: string; path: string[]; value: unknown }
-    expect(op.path).toEqual(['providers', 'router9', 'models', '0', 'input'])
-    expect(op.value).toEqual(['text'])
+    // The settings walker cannot address array elements, so the write is one
+    // whole-array `set` carrying the patched entry; other fields survive.
+    expect(op.op).toBe('set')
+    expect(op.path).toEqual(['providers', 'router9', 'models'])
+    expect(op.value).toEqual([
+      {
+        id: 'deepseek-v4-flash',
+        contextWindow: 1000000,
+        input: ['text'],
+        reasoningEfforts: { off: null, high: 'high' },
+      },
+      { id: 'mimo-v2.5-free' },
+    ])
   })
 
   it('does not inject into an unknown provider card', async () => {

@@ -3,8 +3,9 @@
  * (`llm.providers`) with the settings namespaces (`settings.describe`) and
  * writes the two per-model capability fields the official Models editor does
  * not expose — `input` (image support) and `reasoningEfforts` (thinking
- * levels) — as minimal path-addressed `settings.mutate` ops against the
- * user-layer `providers.<route>.models` array, preserving every hidden field.
+ * levels) — as one whole-array `settings.mutate` `set` on the user-layer
+ * `providers.<route>.models` list (the settings path walker cannot address
+ * array elements), preserving every hidden field.
  *
  * Only pi-ai provider routes whose model list the USER owns are surfaced:
  * the pi-ai schema alone declares the two fields, and a catalog-inherited
@@ -172,27 +173,30 @@ export class ModelCapabilityController {
   }
 
   /**
-   * Write one model field as a single path op, fenced by the latest known
-   * revision. `undefined` unsets the field (re-inherit). Returns the failure
+   * Write one model field, fenced by the latest known revision. `undefined`
+   * unsets the field (re-inherit). The settings service's path walker cannot
+   * descend into arrays — an op like `…models.0.input` would replace the array
+   * with an object and fail schema validation — so the write is one `set` of
+   * the whole `models` array with this field patched in. Returns the failure
    * message, or undefined once the write landed; a landed write advances the
-   * cached revision and patches the cached model optimistically.
+   * cached revision and swaps in the patched model list optimistically.
    */
   async writeField(info: CapabilityProvider, index: number, field: string, value: unknown): Promise<string | undefined> {
     const model = info.models[index]
     if (model === undefined) return 'unknown model'
-    const opPath = [...info.settingsPath, 'models', String(index), field]
+    const patched = { ...model }
+    if (value === undefined) delete patched[field]
+    else patched[field] = value
+    const models = info.models.map((entry, i) => (i === index ? patched : entry))
     try {
       const response = await this.api.settings.mutate({
         ns: info.settingsNs,
-        ops: value === undefined
-          ? [{ op: 'unset', path: opPath }]
-          : [{ op: 'set', path: opPath, value }],
+        ops: [{ op: 'set', path: [...info.settingsPath, 'models'], value: models }],
         expectedRevision: info.revision,
       })
       if (!response.result.ok) return response.result.error.message
       info.revision = response.result.value.revision
-      if (value === undefined) delete model[field]
-      else model[field] = value
+      info.models = models
       this.recordIntent(info, index, field, value)
       return undefined
     } catch (error) {
