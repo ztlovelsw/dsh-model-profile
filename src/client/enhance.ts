@@ -1,9 +1,16 @@
 /**
- * DOM enhancer: puts the image-support + reasoning-level controls INSIDE each
- * model row of the official Models settings editor (the pi-ai provider card's
- * model list). The official editor declares no extension slot, so the enhancer
- * watches the document, detects rows structurally (locale-independent), and
- * appends one capability block per row.
+ * DOM enhancer: puts the image-support + reasoning-level controls INSIDE the
+ * capacity disclosure (modelAdvanced) of each model row in the official Models
+ * settings editor (the pi-ai provider card's model list). The official editor
+ * declares no extension slot, so the enhancer watches the document, detects
+ * rows structurally (locale-independent), and appends one capability block into
+ * the row's capacity disclosure.
+ *
+ * Because the block lives inside the capacity disclosure, the row's chevron
+ * button collapses/expands the capacity fields AND the capability controls
+ * together as one region, and the region is collapsed by default (the official
+ * disclosure starts collapsed). While collapsed the disclosure is not in the
+ * DOM, so nothing is injected until the user expands it.
  *
  * React owns the row markup, so the enhancer is re-runnable: every sweep
  * (re)creates missing blocks and syncs existing ones from the committed
@@ -56,8 +63,29 @@ export function sweepOnce(controller: ModelCapabilityController, t: Translator):
     if (provider === undefined) return
     const index = provider.models.findIndex((model) => String(model['id'] ?? '') === modelId)
     if (index < 0) return
-    ensureBlock(controller, t, modelEntry, provider, index)
+    // The capability block lives INSIDE the capacity disclosure (modelAdvanced),
+    // so the row's chevron collapses/expands capacity + capabilities together and
+    // the whole region stays collapsed by default. When collapsed, modelAdvanced
+    // is not in the DOM, so there is nothing to inject into until it expands.
+    const advanced = findAdvanced(modelEntry, modelRow)
+    if (advanced === undefined) return
+    ensureBlock(controller, t, advanced, provider, index)
   })
+}
+
+/**
+ * The capacity disclosure of a row: the modelEntry child that holds the numeric
+ * capacity inputs (context window / max tokens). Present only while expanded.
+ */
+function findAdvanced(modelEntry: HTMLElement, modelRow: HTMLElement): HTMLElement | undefined {
+  for (const child of Array.from(modelEntry.children)) {
+    if (!(child instanceof HTMLElement) || child === modelRow) continue
+    // The disclosure holds the numeric capacity inputs; a label fallback covers
+    // builds that structure the capacity fields as labeled fields.
+    if (child.querySelector('input[inputmode="numeric"]') !== null) return child
+    if (child.querySelector('label') !== null) return child
+  }
+  return undefined
 }
 
 /**
@@ -86,9 +114,9 @@ function resolveProvider(controller: ModelCapabilityController, from: HTMLElemen
   return undefined
 }
 
-/** Ensure the row carries a capability block bound to this provider/index. */
-function ensureBlock(controller: ModelCapabilityController, t: Translator, modelEntry: HTMLElement, provider: CapabilityProvider, index: number): void {
-  let block = modelEntry.querySelector(':scope > [' + BLOCK_ATTR + ']') as HTMLElement | null
+/** Ensure the capacity disclosure carries a capability block for this provider/index. */
+function ensureBlock(controller: ModelCapabilityController, t: Translator, advanced: HTMLElement, provider: CapabilityProvider, index: number): void {
+  let block = advanced.querySelector(':scope > [' + BLOCK_ATTR + ']') as HTMLElement | null
   if (block !== null) {
     const stale = block.getAttribute('data-mp-provider') !== provider.provider
       || block.getAttribute('data-mp-index') !== String(index)
@@ -99,7 +127,7 @@ function ensureBlock(controller: ModelCapabilityController, t: Translator, model
   }
   if (block === null) {
     block = buildRowControls(controller, t)
-    modelEntry.appendChild(block)
+    advanced.appendChild(block)
   }
   block.setAttribute('data-mp-provider', provider.provider)
   block.setAttribute('data-mp-index', String(index))

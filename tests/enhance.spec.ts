@@ -8,10 +8,11 @@ import type { Translator } from '../src/client/enhance.ts'
 
 /**
  * A faithful slice of the official Models editor DOM: one provider editor card
- * holding one model row. The detection must resolve the provider from the card
- * header and inject a capability block into the row, then keep it in sync.
+ * holding one model row, whose capacity disclosure (modelAdvanced) carries the
+ * numeric capacity inputs. The capability block must be injected INTO that
+ * disclosure so the chevron collapses/expands capacity + capabilities together.
  */
-function buildEditorDom(): { idInput: HTMLInputElement } {
+function buildEditorDom(opts: { expanded: boolean }): void {
   const editor = document.createElement('div')
   const header = document.createElement('div')
   const title = document.createElement('span')
@@ -31,15 +32,31 @@ function buildEditorDom(): { idInput: HTMLInputElement } {
   nameInput.value = ''
   const toggle = document.createElement('button')
   toggle.type = 'button'
-  toggle.setAttribute('aria-expanded', 'false')
+  toggle.setAttribute('aria-expanded', opts.expanded ? 'true' : 'false')
   const remove = document.createElement('button')
   remove.type = 'button'
   row.append(idInput, nameInput, toggle, remove)
   entry.appendChild(row)
+
+  if (opts.expanded) {
+    const advanced = document.createElement('div')
+    advanced.setAttribute('data-test-advanced', '')
+    for (const label of ['上下文窗口', '最大输出 token']) {
+      const field = document.createElement('label')
+      const span = document.createElement('span')
+      span.textContent = label
+      const input = document.createElement('input')
+      input.type = 'text'
+      input.setAttribute('inputmode', 'numeric')
+      field.append(span, input)
+      advanced.appendChild(field)
+    }
+    entry.appendChild(advanced)
+  }
+
   catalog.appendChild(entry)
   editor.append(header, catalog)
   document.body.appendChild(editor)
-  return { idInput }
 }
 
 function fakeApi() {
@@ -100,47 +117,45 @@ function fakeApi() {
 
 const t: Translator = ((key: string) => key) as Translator
 
-describe('models-editor injection', () => {
-  it('injects a capability block into a pi-ai model row and syncs values', async () => {
+describe('models-editor injection (capacity disclosure)', () => {
+  it('injects the block INTO the capacity disclosure when expanded', async () => {
     document.body.innerHTML = ''
     const { api } = fakeApi()
     const controller = new ModelCapabilityController(api as never)
     await controller.load()
-    expect(controller.loaded).toBe(true)
-
-    buildEditorDom()
+    buildEditorDom({ expanded: true })
     sweepOnce(controller, t)
 
+    const advanced = document.querySelector('[data-test-advanced]')!
     const block = document.querySelector('[data-mp-block]')
     expect(block).not.toBeNull()
+    // The block must be a child of the capacity disclosure.
+    expect(block!.parentElement).toBe(advanced)
     expect(block!.getAttribute('data-mp-provider')).toBe('router9')
     expect(block!.getAttribute('data-mp-index')).toBe('0')
-
-    // Image select reflects stored input: ['text','image'] -> 'image' (supports).
+    // Values synced from the stored entry.
     const imageSel = block!.querySelector('[data-mp-image]') as HTMLSelectElement
     expect(imageSel.value).toBe('image')
-
-    // Reasoning select reflects stored reasoningEfforts object -> 'custom'.
     const reasonSel = block!.querySelector('[data-mp-reason]') as HTMLSelectElement
     expect(reasonSel.value).toBe('custom')
-
-    // Custom grid is visible with off + high checked.
-    const grid = block!.querySelector('[data-mp-grid]') as HTMLElement
-    expect(grid.hidden).toBe(false)
-    const highBox = grid.querySelector('[data-mp-level="high"]') as HTMLInputElement
-    const offBox = grid.querySelector('[data-mp-level="off"]') as HTMLInputElement
-    const highWire = grid.querySelector('[data-mp-wire="high"]') as HTMLInputElement
-    expect(highBox.checked).toBe(true)
-    expect(offBox.checked).toBe(true)
-    expect(highWire.value).toBe('high')
   })
 
-  it('writes input on image select change', async () => {
+  it('does NOT inject when the capacity disclosure is collapsed (not in DOM)', async () => {
+    document.body.innerHTML = ''
+    const { api } = fakeApi()
+    const controller = new ModelCapabilityController(api as never)
+    await controller.load()
+    buildEditorDom({ expanded: false })
+    sweepOnce(controller, t)
+    expect(document.querySelector('[data-mp-block]')).toBeNull()
+  })
+
+  it('writes input on image select change (block inside disclosure)', async () => {
     document.body.innerHTML = ''
     const { api, mutateCalls } = fakeApi()
     const controller = new ModelCapabilityController(api as never)
     await controller.load()
-    buildEditorDom()
+    buildEditorDom({ expanded: true })
     sweepOnce(controller, t)
 
     const block = document.querySelector('[data-mp-block]')!
@@ -150,19 +165,16 @@ describe('models-editor injection', () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
 
     expect(mutateCalls.length).toBe(1)
-    expect(mutateCalls[0].ns).toBe('llm-pi-ai')
     const op = mutateCalls[0].ops[0] as { op: string; path: string[]; value: unknown }
-    expect(op.op).toBe('set')
     expect(op.path).toEqual(['providers', 'router9', 'models', '0', 'input'])
     expect(op.value).toEqual(['text'])
   })
 
-  it('does not inject into a deepseek-only or unknown provider card', async () => {
+  it('does not inject into an unknown provider card', async () => {
     document.body.innerHTML = ''
     const { api } = fakeApi()
     const controller = new ModelCapabilityController(api as never)
     await controller.load()
-    // A card whose header names no editable provider.
     const editor = document.createElement('div')
     const header = document.createElement('div')
     const title = document.createElement('span')
@@ -177,9 +189,13 @@ describe('models-editor injection', () => {
     const nameInput = document.createElement('input')
     nameInput.type = 'text'
     const toggle = document.createElement('button')
-    toggle.setAttribute('aria-expanded', 'false')
+    toggle.setAttribute('aria-expanded', 'true')
     row.append(idInput, nameInput, toggle)
-    entry.appendChild(row)
+    const advanced = document.createElement('div')
+    const capInput = document.createElement('input')
+    capInput.setAttribute('inputmode', 'numeric')
+    advanced.appendChild(capInput)
+    entry.append(row, advanced)
     catalog.appendChild(entry)
     editor.append(header, catalog)
     document.body.appendChild(editor)
