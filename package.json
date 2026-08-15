@@ -1,7 +1,7 @@
 {
-  "name": "@deepseek-ai/dsh-model-profile",
+  "name": "@deepseek-ai/dsh-client-ui-model-profile",
   "version": "0.1.0",
-  "description": "DSH Web GUI 模型能力配置：为已配置的模型批量设置是否支持图像与思考等级（reasoning efforts），写入 llm-pi-ai / llm-deepseek 的设置命名空间。",
+  "description": "DSH Web GUI 模型能力配置：在「设置 → 模型」的模型目录编辑器内，为每个已配置的模型直接设置是否支持图像与思考等级（reasoning efforts），写入 llm-pi-ai 设置命名空间。",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.7.0",
@@ -44,7 +44,7 @@
       "inject": [
         "@deepseek-ai/dsh-client-runtime",
         "@deepseek-ai/dsh-client-connection",
-        "@deepseek-ai/dsh-client-ui-settings"
+        "@deepseek-ai/dsh-client-locale"
       ],
       "platform": "web"
     }
@@ -61,12 +61,7 @@
     "@deepseek-ai/dsh-client-connection": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-client-locale": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-client-runtime": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-ui-settings": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-ui-slots": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-invariants": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-llm": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-settings": "^0.1.0-rc.6",
-    "react": "^18.2.0"
+    "@deepseek-ai/dsh-client-ui-slots": "^0.1.0-rc.6"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
@@ -74,24 +69,11 @@
     "@deepseek-ai/dsh-client-connection": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-client-locale": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-client-runtime": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-ui-primitives": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-ui-settings": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-client-ui-slots": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-host-apiproxy": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-invariants": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-llm": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-settings": "^0.1.0-rc.6",
-    "@testing-library/react": "^16.1.0",
     "@types/node": "^22.20.0",
-    "@types/react": "~18.3.1",
-    "@types/react-dom": "~18.3.0",
-    "jsdom": "^26.0.0",
     "lightningcss": "^1.32.0",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
     "tsdown": "^0.22.2",
     "typescript": "^5.9.3",
-    "vite-tsconfig-paths": "^6.1.1",
     "vitest": "^4.1.1"
   }
 }

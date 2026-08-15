@@ -1,44 +1,79 @@
-# dsh-model-profile · 模型能力配置
+# dsh-model-profile · 模型能力配置（图像 + 思考等级）
 
-在 DSH Web 设置 → 插件配置 → Web UI 插件 中新增「模型能力配置」卡片，为**已配置的模型**
-批量设置两项能力（官方「设置 → 模型」页面当前不提供）：
+在 **「设置 → 模型」** 的模型目录编辑器里，**每个已配置模型的行内**直接加两个官方编辑器没有的控件：
 
-- **是否支持图像**：把该模型的 `input` 声明为 `['text', 'image']`（支持）或 `['text']`（不支持）。
-- **思考等级**：把该模型的 `reasoningEfforts` 声明为 `false`（不支持思考）或一组
-  思考等级及其接口取值（`off` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`）。
+- **是否支持图像**：继承默认 / 支持图像（`input: ['text','image']`）/ 仅文本（`input: ['text']`）。
+- **思考等级**：继承默认 / 不支持思考（`reasoningEfforts: false`）/ 自定义等级
+  （`off` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`，逐级勾选并填写接口取值）。
 
-写入目标是模型所属提供方的设置命名空间（`llm-pi-ai`，网关/自定义提供方；`llm-deepseek`
-的模型目录目前不支持这两项字段，因此该提供方显示为只读提示）。保存后即时生效，无需重启。
+改完**即时写入**，无需重启；下一次请求即按新能力调度。
+
+## 它解决什么
+
+官方 Models 设置页的模型行只暴露 id / 显示名称 / 上下文窗口 / 最大输出，**没有**图像支持与
+思考等级入口——这两项只能手写 `settings.yaml`。本插件把它们做成行内控件，填的就是模型目录
+编辑器那个位置（自定义模型目录的每一行）。
 
 ## 工作原理
 
-- **数据来源**：复用官方 Models 页面的 join —— `llm.providers`（可配置提供方目录）+
-  `settings.describe`（命名空间描述）+ `settings.mutate`（路径写）。
-- **写路径**：每个模型的编辑都转成最小 `settings.mutate` path ops：
-  - 图像：`providers.<route>.models[<i>].input`
-  - 思考等级：`providers.<route>.models[<i>].reasoningEfforts`
-- **保留隐藏字段**：只写上述两个字段，模型条目里其他字段（名称、上下文窗口、最大输出、
-  未知的未来字段）原样保留。
-- **宿主端**：无需任何 host 逻辑 —— `llm-pi-ai` 适配器已经读取 `input` 与
-  `reasoningEfforts` 并据此决定图像准入与可选择的思考等级。
+- **宿主端**：无行为（纯浏览器插件）。
+- **浏览器端**：
+  - `controller.ts` 复用官方 Models 页的 join（`llm.providers` + `settings.describe`），只挑出
+    `llm-pi-ai` 命名空间下、模型列表由**用户层**持有的提供方（内置目录继承的列表不会被擅自物化）。
+  - `enhance.ts` 用 MutationObserver 做**与语言无关的结构探测**：以每行的高级展开按钮 + 两个文本
+    输入框为行特征，顺着编辑卡头部（显示名 / route）反查所属提供方。
+  - `controls.ts` 往每个模型行注入一个控件块；React 重绘把它冲掉时，观察器自动重注入并从已提交
+    设置重新同步（不会覆盖你正在编辑的元素）。
+  - 写入走最小 `settings.mutate` 路径操作：`providers.<route>.models[<i>].input` / `.reasoningEfforts`，
+    只动这两个字段，模型条目里其它字段（含未知字段）原样保留，并带 `expectedRevision` 防冲突。
+  - **粘滞复原**：官方编辑器保存时会把整个 `models` 数组从它的草稿写回，可能顺带抹掉你刚设的能力
+    字段；控制器记住你本次会话的显式选择，重载后若发现被抹掉会自动补回，避免数据静默丢失。
 
-## 安装（独立插件，不并入全家桶）
+## 作用范围与限制
 
-本插件是独立安装包，不参与 `dsh-web-ui-all` 聚合。安装到 DSH profile：
+- 只对 **`llm-pi-ai`**（网关 / 自定义提供方）生效——只有它的 schema 声明了每模型 `input` 与
+  `reasoningEfforts`。`llm-deepseek` 官方直连的模型目录不支持这两项，故不注入。
+- 只增强**用户已自定义**的模型列表（`providers.<route>.models` 在用户层存在）。仅继承内置目录的
+  路由请先在模型列表里显式声明模型，再配置能力。
+- 能力字段写的是用户层设置，`modelOverrides` 形式暂不处理。
+
+## 安装（独立插件，不属于 dsh-web-ui-all 聚合）
 
 ```sh
-dsh plugin --profile web add link:<本仓库绝对路径>/packages/dsh-model-profile
+dsh plugin --profile web add link:<本目录绝对路径>
 ```
 
-重启 `dsh web` 后，在「设置 → 插件配置 → Web UI 插件」中找到「模型能力配置」卡片。
+例如：
 
-## 结构
+```sh
+dsh plugin --profile web add link:D:\Desktop\dsh-model-profile
+```
+
+然后重启 `dsh web`，打开「设置 → 模型」，展开任一自定义提供方并打开某个模型的高级设置，
+即可在该模型行内看到「图像与思考」控件块。
+
+## 卸载
+
+```sh
+dsh plugin --profile web remove @deepseek-ai/dsh-client-ui-model-profile
+```
+
+## 开发
+
+```sh
+pnpm install        # 或按 dsh-web-ui 约定链接 SDK 依赖
+pnpm run build      # tsc -b（类型声明）+ tsdown（宿主/客户端 bundle）
+pnpm test           # vitest 纯逻辑单测
+```
+
+结构：
 
 - `src/index.ts` — host 半区入口（无行为）。
-- `src/client/` — browser 半区：
-  - `index.ts` — 注册字典与 Web UI 插件组卡片。
-  - `controller.ts` — 提供方/设置 join 与行模型。
-  - `ModelProfileCard.tsx` — 卡片组件与分步编辑模型。
-  - `PluginSettingsCard.tsx` / `settings-card.module.css` — 卡片外壳。
-  - `locales.ts` — 中英文案。
+- `src/client/index.ts` — browser 半区装配（字典、失效刷新、增强器启动）。
+- `src/client/controller.ts` — providers/models join、写回、粘滞复原。
+- `src/client/enhance.ts` — MutationObserver 结构探测 + 注入协调。
+- `src/client/controls.ts` — 注入块 DOM 构建 / 事件 / 同步。
+- `src/client/core.ts` — 图像 / 思考等级纯逻辑（可单测）。
+- `src/client/locales.ts` — 中英文案。
+- `src/client/enhance.module.css` — 注入块样式（跟随外壳设计令牌）。
 - `cordis.patch.yml` — bundle patch 插件行（id `ui-model-profile`）。

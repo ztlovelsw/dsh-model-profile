@@ -1,0 +1,131 @@
+/* Injected capability block inside one official model row. Styled with the
+   shell's design tokens so it blends into the Models settings card. */
+
+.block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px dashed var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-3);
+}
+
+.title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.row {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 190px;
+  flex: 1;
+}
+
+.label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary);
+}
+
+.select {
+  padding: 6px 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-specific-input-major);
+  max-width: 320px;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.select:focus-visible {
+  outline: none;
+  border-color: var(--dsw-alias-brand-primary);
+  box-shadow: 0 0 0 2px var(--dsw-alias-bg-layer-3), 0 0 0 4px var(--dsw-alias-brand-primary);
+}
+
+.grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+.hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.invalid {
+  margin: 0;
+  font-size: 12px;
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.level {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.levelCheck {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  min-width: 150px;
+  font-size: 13px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.wire {
+  flex: 1;
+  padding: 4px 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-specific-input-major);
+  min-width: 0;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.wire:focus-visible {
+  outline: none;
+  border-color: var(--dsw-alias-brand-primary);
+  box-shadow: 0 0 0 2px var(--dsw-alias-bg-layer-3), 0 0 0 4px var(--dsw-alias-brand-primary);
+}
+
+.wire:disabled {
+  opacity: 0.5;
+}
+
+.error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--dsw-alias-state-error-primary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .select,
+  .wire {
+    transition: none;
+  }
+}

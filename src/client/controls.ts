@@ -1,0 +1,253 @@
+/**
+ * The injected capability block: one image-support select, one reasoning-mode
+ * select, and — in custom mode — the seven thinking-level checkboxes with
+ * their wire-spelling inputs. Plain DOM (the official page is React-owned; the
+ * enhancer re-injects this block whenever React wipes it), syncing from the
+ * committed settings on every sweep and writing through the controller.
+ */
+
+import type { ModelCapabilityController, CapabilityProvider } from './controller.ts'
+import type { Translator } from './enhance.ts'
+import type { ModelProfileKey } from './locales.ts'
+import {
+  THINKING_LEVELS,
+  type ThinkingLevel,
+  type UiEfforts,
+  buildEffortsPayload,
+  effortsValid,
+  imageModeOf,
+  imageValueOf,
+  reasoningModeOf,
+  storedEfforts,
+} from './core.ts'
+import css from './enhance.module.css'
+
+/** Build one capability block. Provider/index travel via data attributes. */
+export function buildRowControls(controller: ModelCapabilityController, t: Translator): HTMLElement {
+  const block = document.createElement('div')
+  block.className = css.block
+  block.setAttribute('data-mp-block', '')
+
+  const title = document.createElement('div')
+  title.className = css.title
+  title.textContent = t('block.title')
+
+  const row = document.createElement('div')
+  row.className = css.row
+
+  // ---- image support ----
+  const imageField = document.createElement('div')
+  imageField.className = css.field
+  const imageLabel = document.createElement('span')
+  imageLabel.className = css.label
+  imageLabel.textContent = t('image')
+  const imageSel = document.createElement('select')
+  imageSel.className = css.select
+  imageSel.setAttribute('data-mp-image', '')
+  imageSel.title = t('image.hint')
+  appendOptions(imageSel, [
+    ['', t('image.inherit')],
+    ['image', t('image.on')],
+    ['text', t('image.off')],
+  ])
+  imageSel.addEventListener('change', () => {
+    const mode = imageSel.value === '' ? 'inherit' : imageSel.value === 'image' ? 'on' : 'off'
+    void performWrite(block, controller, t, 'input', imageValueOf(mode))
+  })
+  imageField.append(imageLabel, imageSel)
+
+  // ---- reasoning mode ----
+  const reasonField = document.createElement('div')
+  reasonField.className = css.field
+  const reasonLabel = document.createElement('span')
+  reasonLabel.className = css.label
+  reasonLabel.textContent = t('reasoning')
+  const reasonSel = document.createElement('select')
+  reasonSel.className = css.select
+  reasonSel.setAttribute('data-mp-reason', '')
+  reasonSel.title = t('reasoning.hint')
+  appendOptions(reasonSel, [
+    ['inherit', t('reasoning.inherit')],
+    ['off', t('reasoning.off')],
+    ['custom', t('reasoning.custom')],
+  ])
+
+  // ---- custom level grid ----
+  const grid = document.createElement('div')
+  grid.className = css.grid
+  grid.setAttribute('data-mp-grid', '')
+  grid.hidden = true
+  const gridHint = document.createElement('p')
+  gridHint.className = css.hint
+  gridHint.textContent = t('reasoning.customHint')
+  grid.appendChild(gridHint)
+  for (const level of THINKING_LEVELS) {
+    const levelRow = document.createElement('div')
+    levelRow.className = css.level
+    const check = document.createElement('label')
+    check.className = css.levelCheck
+    const box = document.createElement('input')
+    box.type = 'checkbox'
+    box.setAttribute('data-mp-level', level)
+    const name = document.createElement('span')
+    name.textContent = t(('effort.' + level) as ModelProfileKey)
+    check.append(box, name)
+    const wire = document.createElement('input')
+    wire.type = 'text'
+    wire.className = css.wire
+    wire.placeholder = level
+    wire.setAttribute('data-mp-wire', level)
+    wire.setAttribute('aria-label', t('effort.wire') + ' ' + t(('effort.' + level) as ModelProfileKey))
+    box.addEventListener('change', () => {
+      if (box.checked && wire.value === '' && level !== 'off') wire.value = level
+      wire.disabled = !box.checked
+      grid.dataset.mpTouched = '1'
+      void writeGrid(block, controller, t, grid)
+    })
+    wire.addEventListener('change', () => {
+      grid.dataset.mpTouched = '1'
+      void writeGrid(block, controller, t, grid)
+    })
+    wire.disabled = true
+    levelRow.append(check, wire)
+    grid.appendChild(levelRow)
+  }
+  const gridInvalid = document.createElement('p')
+  gridInvalid.className = css.invalid
+  gridInvalid.setAttribute('data-mp-invalid', '')
+  gridInvalid.textContent = t('reasoning.invalid')
+  gridInvalid.hidden = true
+  grid.appendChild(gridInvalid)
+
+  reasonSel.addEventListener('change', () => {
+    const mode = reasonSel.value
+    if (mode === 'inherit') {
+      grid.hidden = true
+      void performWrite(block, controller, t, 'reasoningEfforts', undefined)
+    } else if (mode === 'off') {
+      grid.hidden = true
+      void performWrite(block, controller, t, 'reasoningEfforts', false)
+    } else {
+      grid.hidden = false
+      delete grid.dataset.mpTouched
+      // Freshly opened grid reflects the stored efforts; a switch from a
+      // non-custom state starts from them too, so nothing is silently dropped.
+      const index = Number(block.getAttribute('data-mp-index') ?? '-1')
+      const provider = currentProvider(controller, block)
+      if (provider !== undefined && index >= 0 && provider.models[index] !== undefined) {
+        fillGrid(grid, storedEfforts(provider.models[index]))
+      }
+      refreshGridValidity(grid)
+    }
+  })
+  reasonField.append(reasonLabel, reasonSel)
+
+  const error = document.createElement('p')
+  error.className = css.error
+  error.setAttribute('data-mp-error', '')
+  error.hidden = true
+
+  row.append(imageField, reasonField)
+  block.append(title, row, grid, error)
+  return block
+}
+
+/** Sync one block's controls from the committed model entry. */
+export function syncRowControls(controller: ModelCapabilityController, block: HTMLElement, provider: CapabilityProvider, index: number): void {
+  const model = provider.models[index]
+  if (model === undefined) return
+  const imageSel = block.querySelector('[data-mp-image]')
+  if (imageSel instanceof HTMLSelectElement && document.activeElement !== imageSel) {
+    const mode = imageModeOf(model)
+    imageSel.value = mode === 'inherit' ? '' : mode === 'on' ? 'image' : 'text'
+  }
+  const reasonSel = block.querySelector('[data-mp-reason]')
+  if (reasonSel instanceof HTMLSelectElement && document.activeElement !== reasonSel) {
+    const mode = reasoningModeOf(model)
+    reasonSel.value = mode
+    const grid = block.querySelector('[data-mp-grid]')
+    if (grid instanceof HTMLElement) {
+      grid.hidden = mode !== 'custom'
+      if (mode === 'custom') {
+        fillGrid(grid, storedEfforts(model))
+        refreshGridValidity(grid)
+      }
+    }
+  }
+}
+
+/** Resolve the block's current provider from the controller (survives reloads). */
+function currentProvider(controller: ModelCapabilityController, block: HTMLElement): CapabilityProvider | undefined {
+  const route = block.getAttribute('data-mp-provider') ?? ''
+  return controller.byRoute.get(route)
+}
+
+/** Fill the level grid from a UI effort map. */
+function fillGrid(grid: HTMLElement, efforts: UiEfforts): void {
+  for (const level of THINKING_LEVELS) {
+    const box = grid.querySelector('[data-mp-level="' + level + '"]')
+    const wire = grid.querySelector('[data-mp-wire="' + level + '"]')
+    if (!(box instanceof HTMLInputElement) || !(wire instanceof HTMLInputElement)) continue
+    const value = efforts[level]
+    const enabled = value !== undefined
+    box.checked = enabled
+    wire.value = value ?? ''
+    wire.disabled = !enabled
+  }
+}
+
+/** Read the level grid into a UI effort map. */
+function readGrid(grid: HTMLElement): UiEfforts {
+  const efforts: UiEfforts = {}
+  for (const level of THINKING_LEVELS) {
+    const box = grid.querySelector('[data-mp-level="' + level + '"]')
+    const wire = grid.querySelector('[data-mp-wire="' + level + '"]')
+    if (!(box instanceof HTMLInputElement) || !(wire instanceof HTMLInputElement)) continue
+    if (!box.checked) continue
+    efforts[level] = wire.value
+  }
+  return efforts
+}
+
+/** Show/hide the grid validity hint (only after the user touched the grid). */
+function refreshGridValidity(grid: HTMLElement): void {
+  const invalid = grid.querySelector('[data-mp-invalid]')
+  if (!(invalid instanceof HTMLElement)) return
+  const touched = grid.dataset.mpTouched === '1'
+  invalid.hidden = !touched || effortsValid(readGrid(grid))
+}
+
+/** Validate and write the grid as the model's reasoningEfforts. */
+async function writeGrid(block: HTMLElement, controller: ModelCapabilityController, t: Translator, grid: HTMLElement): Promise<void> {
+  refreshGridValidity(grid)
+  const efforts = readGrid(grid)
+  if (!effortsValid(efforts)) return
+  await performWrite(block, controller, t, 'reasoningEfforts', buildEffortsPayload(efforts))
+}
+
+/** One field write through the controller, surfacing failures inside the block. */
+async function performWrite(block: HTMLElement, controller: ModelCapabilityController, t: Translator, field: string, value: unknown): Promise<void> {
+  const provider = currentProvider(controller, block)
+  const index = Number(block.getAttribute('data-mp-index') ?? '-1')
+  const error = block.querySelector('[data-mp-error]')
+  if (provider === undefined || index < 0) return
+  const failure = await controller.writeField(provider, index, field, value)
+  if (error instanceof HTMLElement) {
+    if (failure === undefined) {
+      error.hidden = true
+    } else {
+      error.textContent = t('write.failed', { error: failure })
+      error.hidden = false
+    }
+  }
+}
+
+/** Append value/text pairs as options of a select. */
+function appendOptions(select: HTMLSelectElement, options: [string, string][]): void {
+  for (const [value, label] of options) {
+    const option = document.createElement('option')
+    option.value = value
+    option.textContent = label
+    select.appendChild(option)
+  }
+}
