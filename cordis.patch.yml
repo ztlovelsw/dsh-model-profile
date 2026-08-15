@@ -1,0 +1,6 @@
+# bundle patch for the dsh-model-profile plugin: inserts its plugin row into the
+# web profile roster. Installed with
+# `dsh plugin --profile web add link:<repo>/packages/dsh-model-profile`.
+- insert:
+    - id: ui-model-profile
+      name: '@deepseek-ai/dsh-client-ui-model-profile'
