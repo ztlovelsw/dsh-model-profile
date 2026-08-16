@@ -1,8 +1,9 @@
 /**
  * models.dev 预设：按需拉取 https://models.dev/api.json（公开、CORS 全开），
- * 以模型 ID 匹配出该模型的图像支持（modalities.input）与思考等级枚举
- * （reasoning_options.values），换算成 llm-pi-ai 的 `input` 与
- * `reasoningEfforts` 两个能力字段的取值。
+ * 以模型 ID 匹配出该模型的图像支持（modalities.input）、思考等级枚举
+ * （reasoning_options.values）与容量上限（limit.context / limit.output），
+ * 换算成 llm-pi-ai 的 `input`、`reasoningEfforts`、`contextWindow` 与
+ * `maxTokens` 字段的取值。
  *
  * 匹配策略面向网关路由的模型 ID（如 `ag/gemini-3.7-flash-high`）：
  *  1. 去 `/` 前缀后再匹配；
@@ -17,6 +18,7 @@ export interface ModelsDevModel {
   reasoning?: boolean
   reasoning_options?: Array<{ type?: string; values?: string[] } | undefined>
   modalities?: { input?: string[] }
+  limit?: { context?: number; output?: number }
 }
 
 /** The shapes of api.json the index builder walks. */
@@ -31,6 +33,10 @@ export interface ModelPreset {
   input?: string[]
   /** llm-pi-ai `reasoningEfforts` value: level -> wire spelling (null = send nothing). */
   reasoningEfforts?: Record<string, string | null>
+  /** llm-pi-ai `contextWindow` value: models.dev limit.context. */
+  contextWindow?: number
+  /** llm-pi-ai `maxTokens` value: models.dev limit.output. */
+  maxTokens?: number
 }
 
 /**
@@ -107,8 +113,14 @@ export function presetOf(model: ModelsDevModel): ModelPreset | undefined {
     efforts[level] = level === 'off' ? null : level
   }
   const reasoningEfforts = Object.keys(efforts).length > 0 ? efforts : undefined
-  if (input === undefined && reasoningEfforts === undefined) return undefined
-  return { input, reasoningEfforts }
+  const capacityOf = (value: number | undefined): number | undefined =>
+    typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : undefined
+  const contextWindow = capacityOf(model.limit?.context)
+  const maxTokens = capacityOf(model.limit?.output)
+  if (input === undefined && reasoningEfforts === undefined && contextWindow === undefined && maxTokens === undefined) {
+    return undefined
+  }
+  return { input, reasoningEfforts, contextWindow, maxTokens }
 }
 
 /** In-session cache so one click per page load pays the download once. */

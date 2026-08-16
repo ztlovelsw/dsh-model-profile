@@ -13,7 +13,7 @@ import type { Translator } from '../src/client/enhance.ts'
  * that disclosure (inside the model entry) so it spans the full row width, and
  * mirrors the disclosure's open/closed state so the chevron collapses both.
  */
-function buildEditorDom(opts: { expanded: boolean; modelId?: string }): void {
+function buildEditorDom(opts: { expanded: boolean; modelId?: string; capacity?: [string, string] }): void {
   const editor = document.createElement('div')
   const header = document.createElement('div')
   const title = document.createElement('span')
@@ -42,13 +42,15 @@ function buildEditorDom(opts: { expanded: boolean; modelId?: string }): void {
   if (opts.expanded) {
     const advanced = document.createElement('div')
     advanced.setAttribute('data-test-advanced', '')
-    for (const label of ['上下文窗口', '最大输出 token']) {
+    const capValues = opts.capacity ?? ['', '']
+    for (const [at, label] of ['上下文窗口', '最大输出 token'].entries()) {
       const field = document.createElement('label')
       const span = document.createElement('span')
       span.textContent = label
       const input = document.createElement('input')
       input.type = 'text'
       input.setAttribute('inputmode', 'numeric')
+      input.value = capValues[at]
       field.append(span, input)
       advanced.appendChild(field)
     }
@@ -121,6 +123,26 @@ function fakeApi() {
 }
 
 const t: Translator = ((key: string) => key) as Translator
+
+/**
+ * The stubbed models.dev database for the whole file. The preset module caches
+ * its index after the first fetch, so every test must see the same db — the
+ * stub is installed once at module scope, before any sweep can fetch.
+ */
+const SHARED_DB = {
+  zai: {
+    models: {
+      'glm-5.5-air': {
+        modalities: { input: ['text', 'image'] },
+        reasoning_options: [{ type: 'effort', values: ['high'] }],
+      },
+      // A capacity-only entry: exercises the limit.context / limit.output
+      // preset without touching the image / reasoning fields.
+      'glm-4.6': { limit: { context: 204800, output: 131072 } },
+    },
+  },
+}
+vi.stubGlobal('fetch', async () => ({ ok: true, json: async () => SHARED_DB }) as Response)
 
 describe('models-editor injection (capacity disclosure)', () => {
   it('injects the block as a disclosure sibling (full row width) when expanded', async () => {
@@ -254,23 +276,9 @@ describe('models-editor injection (capacity disclosure)', () => {
 })
 
 describe('staged (unsaved) model rows — fetch-catalog adds', () => {
-  // The models.dev database the auto preset reads (fetch is stubbed below
-  // before any pending block is created; the module-level index cache then
-  // serves every later sweep in this file).
   const STAGED_ID = 'glm-5.5-air'
-  const stubbedDb = {
-    zai: {
-      models: {
-        [STAGED_ID]: {
-          modalities: { input: ['text', 'image'] },
-          reasoning_options: [{ type: 'effort', values: ['high'] }],
-        },
-      },
-    },
-  }
 
   it('injects a pending block with the pre-save banner for a staged row', async () => {
-    vi.stubGlobal('fetch', async () => ({ ok: true, json: async () => stubbedDb }) as Response)
     document.body.innerHTML = ''
     const { api, mutateCalls } = fakeApi()
     const controller = new ModelCapabilityController(api as never)
@@ -289,7 +297,6 @@ describe('staged (unsaved) model rows — fetch-catalog adds', () => {
   })
 
   it('auto-applies the models.dev preset, stages manual edits, and lands everything after save', async () => {
-    vi.stubGlobal('fetch', async () => ({ ok: true, json: async () => stubbedDb }) as Response)
     document.body.innerHTML = ''
     const { api, mutateCalls, models } = fakeApi()
     const controller = new ModelCapabilityController(api as never)
@@ -350,7 +357,6 @@ describe('staged (unsaved) model rows — fetch-catalog adds', () => {
   })
 
   it('never writes a staged choice while the model stays out of settings', async () => {
-    vi.stubGlobal('fetch', async () => ({ ok: true, json: async () => stubbedDb }) as Response)
     document.body.innerHTML = ''
     const { api, mutateCalls } = fakeApi()
     const controller = new ModelCapabilityController(api as never)
@@ -415,9 +421,16 @@ function buildDraftEditorDom(opts: { providerId: string; modelId: string; displa
   if (opts.expanded !== false) {
     const advanced = document.createElement('div')
     advanced.setAttribute('data-test-advanced', '')
-    const capInput = document.createElement('input')
-    capInput.setAttribute('inputmode', 'numeric')
-    advanced.appendChild(capInput)
+    for (const label of ['上下文窗口', '最大输出 token']) {
+      const capField = document.createElement('label')
+      const capSpan = document.createElement('span')
+      capSpan.textContent = label
+      const capInput = document.createElement('input')
+      capInput.type = 'text'
+      capInput.setAttribute('inputmode', 'numeric')
+      capField.append(capSpan, capInput)
+      advanced.appendChild(capField)
+    }
     entry.appendChild(advanced)
   }
   catalog.appendChild(entry)
@@ -448,7 +461,6 @@ describe('draft provider editor (add custom provider)', () => {
   const DB_MODEL = 'glm-5.5-air'
 
   it('binds a pending block to the typed Provider ID before creation', async () => {
-    vi.stubGlobal('fetch', async () => ({ ok: true, json: async () => ({}) }) as Response)
     document.body.innerHTML = ''
     const { api, mutateCalls } = fakeApi()
     const controller = new ModelCapabilityController(api as never)
@@ -467,7 +479,6 @@ describe('draft provider editor (add custom provider)', () => {
   })
 
   it('auto-presets, stages manual edits, and lands everything after 创建提供方', async () => {
-    vi.stubGlobal('fetch', async () => ({ ok: true, json: async () => ({ zai: { models: { [DB_MODEL]: { modalities: { input: ['text', 'image'] }, reasoning_options: [{ type: 'effort', values: ['high'] }] } } } }) }) as Response)
     document.body.innerHTML = ''
     const { api, mutateCalls, providers, userProviders } = fakeApi()
     const controller = new ModelCapabilityController(api as never)
@@ -574,6 +585,95 @@ describe('draft provider editor (add custom provider)', () => {
 
     expect(controller.readIntent(DRAFT_ID, 'm-a')?.input).toEqual(['text', 'image'])
     expect(controller.readIntent(DRAFT_ID, 'm-b')?.reasoningEfforts).toBe(false)
+    expect(mutateCalls.length).toBe(0)
+  })
+})
+
+describe('capacity auto-preset (contextWindow / maxTokens)', () => {
+  const capInputs = (): HTMLInputElement[] =>
+    [...document.querySelectorAll('[data-test-advanced] input[inputmode="numeric"]')] as HTMLInputElement[]
+
+  it('fills the empty capacity inputs of a committed row from models.dev, without writing settings', async () => {
+    document.body.innerHTML = ''
+    const { api, mutateCalls, models } = fakeApi()
+    models.push({ id: 'glm-4.6' })
+    const controller = new ModelCapabilityController(api as never)
+    await controller.load()
+    buildEditorDom({ expanded: true, modelId: 'glm-4.6' })
+    sweepOnce(controller, t)
+
+    const inputs = capInputs()
+    await vi.waitFor(() => expect(inputs[0].value).toBe('204800'))
+    expect(inputs[1].value).toBe('131072')
+    // The values stage into the editor's own draft; nothing hits settings.
+    expect(mutateCalls.length).toBe(0)
+  })
+
+  it('keeps values the endpoint disclosed or the user typed', async () => {
+    document.body.innerHTML = ''
+    const { api, mutateCalls, models } = fakeApi()
+    models.push({ id: 'glm-4.6', contextWindow: 999000 })
+    const controller = new ModelCapabilityController(api as never)
+    await controller.load()
+    buildEditorDom({ expanded: true, modelId: 'glm-4.6', capacity: ['999000', ''] })
+    sweepOnce(controller, t)
+    await new Promise((resolve) => setTimeout(resolve, 30))
+
+    const inputs = capInputs()
+    expect(inputs[0].value).toBe('999000')
+    expect(inputs[1].value).toBe('131072')
+    expect(mutateCalls.length).toBe(0)
+  })
+
+  it('does not refill an auto-filled input the user cleared', async () => {
+    document.body.innerHTML = ''
+    const { api, models } = fakeApi()
+    models.push({ id: 'glm-4.6' })
+    const controller = new ModelCapabilityController(api as never)
+    await controller.load()
+    buildEditorDom({ expanded: true, modelId: 'glm-4.6' })
+    sweepOnce(controller, t)
+    const inputs = capInputs()
+    await vi.waitFor(() => expect(inputs[0].value).toBe('204800'))
+
+    inputs[0].value = ''
+    sweepOnce(controller, t)
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(inputs[0].value).toBe('')
+  })
+
+  it('fills the capacity inputs of a staged (unsaved) row too', async () => {
+    document.body.innerHTML = ''
+    const { api, mutateCalls } = fakeApi()
+    const controller = new ModelCapabilityController(api as never)
+    await controller.load()
+    buildEditorDom({ expanded: true, modelId: 'glm-4.6' })
+    sweepOnce(controller, t)
+
+    const block = document.querySelector('[data-mp-block]') as HTMLElement
+    expect(block.getAttribute('data-mp-pending-id')).toBe('glm-4.6')
+    const inputs = capInputs()
+    await vi.waitFor(() => expect(inputs[0].value).toBe('204800'))
+    expect(inputs[1].value).toBe('131072')
+    expect(mutateCalls.length).toBe(0)
+  })
+
+  it('the preset button overwrites non-empty capacity inputs', async () => {
+    document.body.innerHTML = ''
+    const { api, mutateCalls, models } = fakeApi()
+    models.push({ id: 'glm-4.6', contextWindow: 111000 })
+    const controller = new ModelCapabilityController(api as never)
+    await controller.load()
+    buildEditorDom({ expanded: true, modelId: 'glm-4.6', capacity: ['111000', '222000'] })
+    sweepOnce(controller, t)
+
+    const block = document.querySelector('[data-mp-block]') as HTMLElement
+    const presetBtn = block.querySelector('[data-mp-preset]') as HTMLButtonElement
+    presetBtn.click()
+    const inputs = capInputs()
+    await vi.waitFor(() => expect(inputs[0].value).toBe('204800'))
+    expect(inputs[1].value).toBe('131072')
+    // Capacity-only preset: no image/reasoning opinion, so no settings write.
     expect(mutateCalls.length).toBe(0)
   })
 })

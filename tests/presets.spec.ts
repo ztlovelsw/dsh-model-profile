@@ -122,4 +122,20 @@ describe('presetOf', () => {
     expect(deepseek?.reasoningEfforts).toBeUndefined()
     expect(deepseek?.input).toEqual(['text'])
   })
+
+  it('maps limit.context / limit.output to contextWindow / maxTokens, dropping junk', () => {
+    const capped = presetOf({ modalities: { input: ['text'] }, limit: { context: 204800, output: 131072 } })
+    expect(capped?.contextWindow).toBe(204800)
+    expect(capped?.maxTokens).toBe(131072)
+    // Non-positive / fractional / missing limits carry no opinion.
+    const junk = presetOf({ limit: { context: 0, output: -1 } })
+    expect(junk?.contextWindow).toBeUndefined()
+    expect(junk?.maxTokens).toBeUndefined()
+  })
+
+  it('yields a capacity-only preset for an entry with nothing but limits', () => {
+    expect(presetOf({ limit: { context: 1000000 } })).toEqual({ contextWindow: 1000000 })
+    expect(presetOf({ limit: { output: 65536 } })).toEqual({ maxTokens: 65536 })
+    expect(presetOf({})).toBeUndefined()
+  })
 })

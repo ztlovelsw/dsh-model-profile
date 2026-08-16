@@ -21,7 +21,7 @@ import {
   reasoningModeOf,
   storedEfforts,
 } from './core.ts'
-import { fetchModelsDevIndex, findModel, presetOf } from './presets.ts'
+import { fetchModelsDevIndex, findModel, presetOf, type ModelPreset } from './presets.ts'
 import css from './enhance.module.css'
 
 /** Build one capability block. Provider/index travel via data attributes. */
@@ -198,7 +198,10 @@ async function applyPreset(block: HTMLElement, controller: ModelCapabilityContro
     const db = await fetchModelsDevIndex()
     const found = findModel(db, modelId)
     const preset = found === undefined ? undefined : presetOf(found)
-    if (preset === undefined || (preset.input === undefined && preset.reasoningEfforts === undefined)) {
+    const empty = preset === undefined
+      || (preset.input === undefined && preset.reasoningEfforts === undefined
+        && preset.contextWindow === undefined && preset.maxTokens === undefined)
+    if (empty) {
       if (error instanceof HTMLElement) {
         error.textContent = t('preset.none')
         error.hidden = false
@@ -207,6 +210,18 @@ async function applyPreset(block: HTMLElement, controller: ModelCapabilityContro
     }
     if (preset.input !== undefined) await performWrite(block, controller, t, 'input', preset.input)
     if (preset.reasoningEfforts !== undefined) await performWrite(block, controller, t, 'reasoningEfforts', preset.reasoningEfforts)
+    // Capacity fields are the official editor's own inputs: fill them so the
+    // editor's draft (and its save) carries the values. Unlike the auto pass,
+    // an explicit preset click overwrites whatever the inputs held.
+    const [contextInput, maxInput] = capacityInputsOf(block)
+    if (preset.contextWindow !== undefined && contextInput !== undefined) {
+      capacityFilled.add(contextInput)
+      setControlledValue(contextInput, String(preset.contextWindow))
+    }
+    if (preset.maxTokens !== undefined && maxInput !== undefined) {
+      capacityFilled.add(maxInput)
+      setControlledValue(maxInput, String(preset.maxTokens))
+    }
     if (pendingId !== '') syncPendingControls(controller, block, provider, pendingId)
     else syncRowControls(controller, block, provider, index)
   } catch (failure) {
@@ -216,6 +231,67 @@ async function applyPreset(block: HTMLElement, controller: ModelCapabilityContro
     }
   } finally {
     button.disabled = false
+  }
+}
+
+/**
+ * The official capacity inputs of the row a block lives in — contextWindow
+ * first, maxTokens second (the editor renders them in that order, both as
+ * `input[inputmode=numeric]` inside the expanded capacity disclosure).
+ * Absent while the row is collapsed: React unmounts the disclosure content.
+ */
+function capacityInputsOf(block: HTMLElement): Array<HTMLInputElement | undefined> {
+  const entry = block.parentElement
+  if (!(entry instanceof HTMLElement)) return [undefined, undefined]
+  const numeric = Array.from(entry.querySelectorAll<HTMLInputElement>('input[inputmode="numeric"]'))
+  return [numeric[0], numeric[1]]
+}
+
+/**
+ * Set one React-controlled input's value so the official editor's own onChange
+ * stages it into its draft (the capacity fields land through the editor's
+ * save, exactly as if the user had typed them). The native setter bypasses
+ * React's value tracker; the bubbled `input` event triggers its listener.
+ */
+function setControlledValue(input: HTMLInputElement, text: string): void {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+  if (setter === undefined) return
+  setter.call(input, text)
+  input.dispatchEvent(new Event('input', { bubbles: true }))
+}
+
+/** Inputs this session already auto-filled once, so a user clear stays cleared. */
+const capacityFilled = new WeakSet<HTMLInputElement>()
+
+/**
+ * Fill the row's EMPTY capacity inputs from models.dev — gaps only: a value
+ * the endpoint disclosed (fetch-catalog) or the user typed always wins. Runs
+ * on every sweep, but only touches inputs it never filled before, so clearing
+ * an auto-filled value is a deliberate choice the plugin respects. A failed
+ * fetch is silent (the manual preset button still works).
+ */
+export async function autoFillCapacity(block: HTMLElement, modelId: string): Promise<void> {
+  if (modelId.length === 0) return
+  const [contextInput, maxInput] = capacityInputsOf(block)
+  const open = [contextInput, maxInput].filter(
+    (input): input is HTMLInputElement => input !== undefined && input.value.trim() === '' && !capacityFilled.has(input),
+  )
+  if (open.length === 0) return
+  let preset: ModelPreset | undefined
+  try {
+    const found = findModel(await fetchModelsDevIndex(), modelId)
+    preset = found === undefined ? undefined : presetOf(found)
+  } catch {
+    return
+  }
+  if (preset === undefined) return
+  const values = [preset.contextWindow, preset.maxTokens]
+  for (let at = 0; at < 2; at++) {
+    const input = at === 0 ? contextInput : maxInput
+    const value = values[at]
+    if (input === undefined || value === undefined || !open.includes(input)) continue
+    capacityFilled.add(input)
+    setControlledValue(input, String(value))
   }
 }
 

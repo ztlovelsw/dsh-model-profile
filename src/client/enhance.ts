@@ -23,7 +23,7 @@
 
 import type { CapabilityProvider, ModelCapabilityController } from './controller.ts'
 import type { ModelProfileKey } from './locales.ts'
-import { autoPresetForNewModel, buildRowControls, syncPendingControls, syncRowControls } from './controls.ts'
+import { autoFillCapacity, autoPresetForNewModel, buildRowControls, syncPendingControls, syncRowControls } from './controls.ts'
 
 /** Translate one dictionary key with optional `{name}` template params. */
 export type Translator = (key: ModelProfileKey, params?: Record<string, unknown>) => string
@@ -216,6 +216,9 @@ function ensureBlock(controller: ModelCapabilityController, t: Translator, model
   if (note instanceof HTMLElement) note.hidden = pendingId === ''
   if (pendingId === '') syncRowControls(controller, block, provider, index)
   else syncPendingControls(controller, block, provider, pendingId)
+  // The expanded disclosure is where the official capacity inputs live; fill
+  // empty ones from models.dev so the editor's save carries the preset too.
+  void autoFillCapacity(block, pendingId !== '' ? pendingId : String(provider.models[index]?.['id'] ?? ''))
 }
 
 /** Start the enhancer: mutation-driven sweeps plus a low-frequency fallback. */
