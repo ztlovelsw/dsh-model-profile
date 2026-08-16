@@ -55,6 +55,13 @@ export class ModelCapabilityController {
   readonly byRoute = new Map<string, CapabilityProvider>()
   /** Editable providers by display name (a card header shows either). */
   readonly byDisplayName = new Map<string, CapabilityProvider>()
+  /**
+   * Draft providers for rows in the "add custom provider" editor — entries
+   * the official editor has staged but not yet committed. The `provider` is
+   * the user-typed `Provider ID`; the `models` array is empty (rows are read
+   * from the DOM, not from settings). Cleared on every {@link load}.
+   */
+  readonly byDraftRoute = new Map<string, CapabilityProvider>()
   /** False until the first successful join load. */
   loaded = false
   /** Latest load wins; an older response never overwrites a newer one. */
@@ -78,6 +85,10 @@ export class ModelCapabilityController {
 
   /** Refresh the join: provider directory + settings namespaces in parallel. */
   async load(): Promise<void> {
+    // A load means settings changed; any draft route that got committed is now
+    // a real byRoute entry, and uncommitted drafts re-register on their next
+    // sweep, so stale synthetics never linger.
+    this.byDraftRoute.clear()
     const generation = ++this.generation
     try {
       const [providersResponse, settingsResponse] = await Promise.all([
@@ -139,7 +150,10 @@ export class ModelCapabilityController {
         const modelId = key.slice(sep + 1)
         const provider = this.byRoute.get(route)
         if (provider === undefined) {
-          this.intended.delete(key)
+          // A pending choice may belong to a draft provider (add-custom flow)
+          // whose route is not committed yet — keep waiting for the save. A
+          // committed choice whose provider vanished was removed by the user.
+          if (!intent.pending) this.intended.delete(key)
           continue
         }
         const index = provider.models.findIndex((model) => String(model['id'] ?? '') === modelId)
@@ -188,6 +202,10 @@ export class ModelCapabilityController {
    * cached revision and swaps in the patched model list optimistically.
    */
   async writeField(info: CapabilityProvider, index: number, field: string, value: unknown): Promise<string | undefined> {
+    // Draft providers carry a NaN revision; their rows always stage through
+    // recordPending instead. Unreachable in practice, but the invariant is
+    // explicit: an unsaved provider can never write settings.
+    if (Number.isNaN(info.revision)) return 'provider not saved yet'
     const model = info.models[index]
     if (model === undefined) return 'unknown model'
     const patched = { ...model }
@@ -252,6 +270,24 @@ export class ModelCapabilityController {
       if (value !== undefined && value !== ABSENT) model[field] = value
     }
     return model
+  }
+
+  /**
+   * Drop the pending choices of one draft route — the user retyped or cleared
+   * the `Provider ID`, disowning everything staged under the old id (nothing
+   * must resurrect when some future provider takes that id).
+   */
+  evictPending(route: string): void {
+    const prefix = route + '\u0000'
+    for (const key of Array.from(this.intended.keys())) {
+      if (!key.startsWith(prefix)) continue
+      if (this.intended.get(key)?.pending) this.intended.delete(key)
+    }
+  }
+
+  /** Read one staged or committed choice back — for tests and diagnostics. */
+  readIntent(route: string, modelId: string): { input?: unknown; reasoningEfforts?: unknown; pending?: boolean } | undefined {
+    return this.intended.get(route + '\u0000' + modelId)
   }
 }
 

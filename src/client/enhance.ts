@@ -63,7 +63,10 @@ export function sweepOnce(controller: ModelCapabilityController, t: Translator):
     if (!(idInput instanceof HTMLInputElement)) return
     const modelId = idInput.value.trim()
     if (modelId.length === 0) return
-    const provider = resolveProvider(controller, modelEntry)
+    // Draft card ("add custom provider", catalog NOT inside the customized
+    // <details>) resolves to a synthetic provider staged in byDraftRoute;
+    // the edit card keeps the header-span lookup against committed routes.
+    const provider = resolveDraftProvider(controller, modelEntry) ?? resolveProvider(controller, modelEntry)
     if (provider === undefined) return
     const index = provider.models.findIndex((model) => String(model['id'] ?? '') === modelId)
     // The capability block lives inside modelEntry — a sibling of modelAdvanced —
@@ -127,6 +130,57 @@ function resolveProvider(controller: ModelCapabilityController, from: HTMLElemen
     current = current.parentElement
   }
   return undefined
+}
+
+/**
+ * Last draft route registered per "add custom provider" card, so a retyped
+ * `Provider ID` evicts the choices staged under the abandoned id.
+ */
+const draftRoutes = new WeakMap<HTMLElement, string>()
+
+/**
+ * The draft provider of an "add custom provider" editor: rows staged before
+ * the card's create action commits the route into settings. Locale-free
+ * discriminator: that editor's model catalog is a DIRECT child of the card,
+ * while every edit-existing-provider card nests its catalog inside the
+ * customized `<details>` disclosure. The card's fields precede the catalog in
+ * DOM order — the first input is the `Provider ID`, the second the display
+ * name. Registers a synthetic provider (NaN revision, empty models) whose
+ * rows always take the pending path; nothing is written until the save lands
+ * the route, after which reconcile stages the choices in.
+ */
+function resolveDraftProvider(controller: ModelCapabilityController, modelEntry: HTMLElement): CapabilityProvider | undefined {
+  const catalog = modelEntry.parentElement
+  if (!(catalog instanceof HTMLElement)) return undefined
+  if (catalog.closest('details') !== null) return undefined
+  const card = catalog.parentElement
+  if (!(card instanceof HTMLElement)) return undefined
+  const fieldsBeforeCatalog: HTMLInputElement[] = []
+  for (const element of Array.from(card.querySelectorAll('input'))) {
+    if (!(element instanceof HTMLInputElement)) continue
+    // Model-row inputs live inside the catalog; the provider fields precede it.
+    if (catalog.contains(element)) break
+    if (element.type === 'checkbox' || element.type === 'radio') continue
+    fieldsBeforeCatalog.push(element)
+  }
+  const routeInput = fieldsBeforeCatalog[0]
+  if (routeInput === undefined) return undefined
+  const route = routeInput.value.trim()
+  if (route.length === 0) return undefined
+  const previous = draftRoutes.get(card)
+  if (previous !== undefined && previous !== route) controller.evictPending(previous)
+  draftRoutes.set(card, route)
+  const displayName = fieldsBeforeCatalog[1]?.value.trim() ?? ''
+  const info: CapabilityProvider = {
+    provider: route,
+    displayName: displayName.length > 0 ? displayName : route,
+    settingsNs: 'llm-pi-ai',
+    settingsPath: ['providers', route],
+    revision: Number.NaN,
+    models: [],
+  }
+  controller.byDraftRoute.set(route, info)
+  return info
 }
 
 /**

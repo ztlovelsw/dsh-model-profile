@@ -55,8 +55,12 @@ function buildEditorDom(opts: { expanded: boolean; modelId?: string }): void {
     entry.appendChild(advanced)
   }
 
+  // The edit-existing card nests its model catalog inside the customized
+  // <details> disclosure — the structural opposite of a draft card.
   catalog.appendChild(entry)
-  editor.append(header, catalog)
+  const customized = document.createElement('details')
+  customized.appendChild(catalog)
+  editor.append(header, customized)
   document.body.appendChild(editor)
 }
 
@@ -70,21 +74,21 @@ function fakeApi() {
     },
     { id: 'mimo-v2.5-free' },
   ]
+  const providers = [{
+    provider: 'router9',
+    displayName: '9router',
+    settingsNs: 'llm-pi-ai',
+    settingsPath: ['providers', 'router9'],
+    active: true,
+  }]
+  const userProviders: Record<string, { models: unknown[] }> = { router9: { models } }
   const mutateCalls: { ns: string; ops: unknown[] }[] = []
   const api = {
     llm: {
       providers: async () => ({
         result: {
           ok: true as const,
-          value: {
-            providers: [{
-              provider: 'router9',
-              displayName: '9router',
-              settingsNs: 'llm-pi-ai',
-              settingsPath: ['providers', 'router9'],
-              active: true,
-            }],
-          },
+          value: { providers },
         },
       }),
     },
@@ -98,8 +102,8 @@ function fakeApi() {
             namespaces: [{
               ns: 'llm-pi-ai',
               schema: {},
-              value: { providers: { router9: { models } } },
-              user: { providers: { router9: { models } } },
+              value: { providers: userProviders },
+              user: { providers: userProviders },
               applies: 'live' as const,
               secrets: [],
               revision: 7,
@@ -113,7 +117,7 @@ function fakeApi() {
       },
     },
   }
-  return { api, mutateCalls, models }
+  return { api, mutateCalls, models, providers, userProviders }
 }
 
 const t: Translator = ((key: string) => key) as Translator
@@ -364,6 +368,212 @@ describe('staged (unsaved) model rows — fetch-catalog adds', () => {
     // keep waiting for the save — no write while the model is absent.
     document.body.innerHTML = ''
     await controller.load()
+    expect(mutateCalls.length).toBe(0)
+  })
+})
+
+/**
+ * The "add custom provider" editor: a draft card whose model catalog is a
+ * DIRECT child of the card (the edit card nests its catalog inside the
+ * customized <details>), with the Provider ID / 显示名称 fields preceding the
+ * catalog. Rows must get capability blocks before the provider is committed,
+ * staged in memory, and landed by reconcile once 创建提供方 saves the route.
+ */
+function buildDraftEditorDom(opts: { providerId: string; modelId: string; displayName?: string; expanded?: boolean }): void {
+  const editor = document.createElement('div')
+  const header = document.createElement('div')
+  const title = document.createElement('span')
+  title.textContent = '自定义提供方'
+  header.appendChild(title)
+
+  const field = (label: string, value: string): HTMLElement => {
+    const wrap = document.createElement('div')
+    const span = document.createElement('span')
+    span.textContent = label
+    const input = document.createElement('input')
+    input.type = 'text'
+    input.value = value
+    wrap.append(span, input)
+    return wrap
+  }
+
+  const catalog = document.createElement('section')
+  const entry = document.createElement('div')
+  const row = document.createElement('div')
+  const idInput = document.createElement('input')
+  idInput.type = 'text'
+  idInput.value = opts.modelId
+  const nameInput = document.createElement('input')
+  nameInput.type = 'text'
+  const toggle = document.createElement('button')
+  toggle.type = 'button'
+  toggle.setAttribute('aria-expanded', opts.expanded === false ? 'false' : 'true')
+  const remove = document.createElement('button')
+  remove.type = 'button'
+  row.append(idInput, nameInput, toggle, remove)
+  entry.appendChild(row)
+  if (opts.expanded !== false) {
+    const advanced = document.createElement('div')
+    advanced.setAttribute('data-test-advanced', '')
+    const capInput = document.createElement('input')
+    capInput.setAttribute('inputmode', 'numeric')
+    advanced.appendChild(capInput)
+    entry.appendChild(advanced)
+  }
+  catalog.appendChild(entry)
+
+  const actions = document.createElement('div')
+  const cancel = document.createElement('button')
+  cancel.type = 'button'
+  cancel.textContent = '取消'
+  const create = document.createElement('button')
+  create.type = 'button'
+  create.textContent = '创建提供方'
+  actions.append(cancel, create)
+
+  editor.append(
+    header,
+    field('Provider ID', opts.providerId),
+    field('显示名称', opts.displayName ?? ''),
+    field('API 地址', ''),
+    field('API 密钥', ''),
+    catalog,
+    actions,
+  )
+  document.body.appendChild(editor)
+}
+
+describe('draft provider editor (add custom provider)', () => {
+  const DRAFT_ID = 'acme'
+  const DB_MODEL = 'glm-5.5-air'
+
+  it('binds a pending block to the typed Provider ID before creation', async () => {
+    vi.stubGlobal('fetch', async () => ({ ok: true, json: async () => ({}) }) as Response)
+    document.body.innerHTML = ''
+    const { api, mutateCalls } = fakeApi()
+    const controller = new ModelCapabilityController(api as never)
+    await controller.load()
+    buildDraftEditorDom({ providerId: DRAFT_ID, modelId: 'draft-unknown-model' })
+    sweepOnce(controller, t)
+
+    const block = document.querySelector('[data-mp-block]') as HTMLElement
+    expect(block).not.toBeNull()
+    expect(block.getAttribute('data-mp-provider')).toBe(DRAFT_ID)
+    expect(block.getAttribute('data-mp-pending-id')).toBe('draft-unknown-model')
+    expect(block.getAttribute('data-mp-index')).toBe('-1')
+    expect(block.querySelector('[data-mp-pending-note]')!.hidden).toBe(false)
+    expect(mutateCalls.length).toBe(0)
+    expect(controller.byDraftRoute.get(DRAFT_ID)).toBeDefined()
+  })
+
+  it('auto-presets, stages manual edits, and lands everything after 创建提供方', async () => {
+    vi.stubGlobal('fetch', async () => ({ ok: true, json: async () => ({ zai: { models: { [DB_MODEL]: { modalities: { input: ['text', 'image'] }, reasoning_options: [{ type: 'effort', values: ['high'] }] } } } }) }) as Response)
+    document.body.innerHTML = ''
+    const { api, mutateCalls, providers, userProviders } = fakeApi()
+    const controller = new ModelCapabilityController(api as never)
+    await controller.load()
+    buildDraftEditorDom({ providerId: DRAFT_ID, modelId: DB_MODEL })
+    sweepOnce(controller, t)
+
+    // Auto preset from models.dev, reflected in the block without any write.
+    await vi.waitFor(() => {
+      const imageSel = document.querySelector('[data-mp-image]') as HTMLSelectElement
+      expect(imageSel.value).toBe('image')
+      const reasonSel = document.querySelector('[data-mp-reason]') as HTMLSelectElement
+      expect(reasonSel.value).toBe('custom')
+    })
+    expect(mutateCalls.length).toBe(0)
+
+    // Manual override of one field still writes nothing pre-creation.
+    const imageSel = document.querySelector('[data-mp-image]') as HTMLSelectElement
+    imageSel.value = 'text'
+    imageSel.dispatchEvent(new Event('change'))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(mutateCalls.length).toBe(0)
+
+    // 创建提供方 commits the route with the typed models; reconcile lands
+    // both staged capabilities as whole-array writes under the new route.
+    providers.push({ provider: DRAFT_ID, displayName: 'Acme', settingsNs: 'llm-pi-ai', settingsPath: ['providers', DRAFT_ID], active: true })
+    userProviders[DRAFT_ID] = { models: [{ id: DB_MODEL, contextWindow: 64000 }] }
+    await controller.load()
+    await vi.waitFor(() => expect(mutateCalls.length).toBe(2))
+    for (const call of mutateCalls) {
+      const op = call.ops[0] as { op: string; path: string[] }
+      expect(op.op).toBe('set')
+      expect(op.path).toEqual(['providers', DRAFT_ID, 'models'])
+    }
+    const final = mutateCalls[1].ops[0] as { value: unknown }
+    expect(final.value).toEqual([
+      { id: DB_MODEL, contextWindow: 64000, input: ['text'], reasoningEfforts: { high: 'high' } },
+    ])
+  })
+
+  it('evicts staged choices when the Provider ID is retyped', async () => {
+    document.body.innerHTML = ''
+    const { api, mutateCalls } = fakeApi()
+    const controller = new ModelCapabilityController(api as never)
+    await controller.load()
+    buildDraftEditorDom({ providerId: DRAFT_ID, modelId: 'm1' })
+    sweepOnce(controller, t)
+    const imageSel = document.querySelector('[data-mp-image]') as HTMLSelectElement
+    imageSel.value = 'image'
+    imageSel.dispatchEvent(new Event('change'))
+    expect(controller.readIntent(DRAFT_ID, 'm1')).toBeDefined()
+
+    // Retype the Provider ID: the old id's staged choices are disowned.
+    const routeInput = document.querySelector('body > div > div > input') as HTMLInputElement
+    routeInput.value = DRAFT_ID + '-2'
+    routeInput.dispatchEvent(new Event('input', { bubbles: true }))
+    sweepOnce(controller, t)
+    expect(controller.readIntent(DRAFT_ID, 'm1')).toBeUndefined()
+    const block = document.querySelector('[data-mp-block]') as HTMLElement
+    expect(block.getAttribute('data-mp-provider')).toBe(DRAFT_ID + '-2')
+    expect(mutateCalls.length).toBe(0)
+  })
+
+  it('keeps a cancelled draft unwritten across later loads', async () => {
+    document.body.innerHTML = ''
+    const { api, mutateCalls } = fakeApi()
+    const controller = new ModelCapabilityController(api as never)
+    await controller.load()
+    buildDraftEditorDom({ providerId: DRAFT_ID, modelId: 'm1' })
+    sweepOnce(controller, t)
+    const imageSel = document.querySelector('[data-mp-image]') as HTMLSelectElement
+    imageSel.value = 'image'
+    imageSel.dispatchEvent(new Event('change'))
+
+    // Cancel: the card disappears; the pending choice stays dormant (never
+    // written) unless a provider with that exact id and model appears.
+    document.body.innerHTML = ''
+    await controller.load()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(mutateCalls.length).toBe(0)
+    expect(controller.readIntent(DRAFT_ID, 'm1')?.pending).toBe(true)
+    expect(controller.byDraftRoute.size).toBe(0)
+  })
+
+  it('stages rows from two draft cards sharing one typed id without trampling', async () => {
+    document.body.innerHTML = ''
+    const { api, mutateCalls } = fakeApi()
+    const controller = new ModelCapabilityController(api as never)
+    await controller.load()
+    buildDraftEditorDom({ providerId: DRAFT_ID, modelId: 'm-a' })
+    buildDraftEditorDom({ providerId: DRAFT_ID, modelId: 'm-b' })
+    sweepOnce(controller, t)
+
+    const blocks = [...document.querySelectorAll('[data-mp-block]')] as HTMLElement[]
+    expect(blocks.length).toBe(2)
+    const blockA = blocks.find((b) => b.getAttribute('data-mp-pending-id') === 'm-a')!
+    const blockB = blocks.find((b) => b.getAttribute('data-mp-pending-id') === 'm-b')!
+    const imageA = blockA.querySelector('[data-mp-image]') as HTMLSelectElement
+    imageA.value = 'image'
+    imageA.dispatchEvent(new Event('change'))
+    const reasonB = blockB.querySelector('[data-mp-reason]') as HTMLSelectElement
+    reasonB.value = 'off'
+    reasonB.dispatchEvent(new Event('change'))
+
+    expect(controller.readIntent(DRAFT_ID, 'm-a')?.input).toEqual(['text', 'image'])
+    expect(controller.readIntent(DRAFT_ID, 'm-b')?.reasoningEfforts).toBe(false)
     expect(mutateCalls.length).toBe(0)
   })
 })

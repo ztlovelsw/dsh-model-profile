@@ -288,7 +288,7 @@ function syncBlockFromModel(block: HTMLElement, model: Record<string, unknown>):
 /** Resolve the block's current provider from the controller (survives reloads). */
 function currentProvider(controller: ModelCapabilityController, block: HTMLElement): CapabilityProvider | undefined {
   const route = block.getAttribute('data-mp-provider') ?? ''
-  return controller.byRoute.get(route)
+  return controller.byRoute.get(route) ?? controller.byDraftRoute.get(route)
 }
 
 /** Fill the level grid from a UI effort map. */
