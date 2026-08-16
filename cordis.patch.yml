@@ -3,4 +3,4 @@
 # `dsh plugin --profile web add link:<repo>/packages/dsh-model-profile`.
 - insert:
     - id: ui-model-profile
-      name: '@deepseek-ai/dsh-client-ui-model-profile'
+      name: '@ztlovelsw/dsh-model-profile'

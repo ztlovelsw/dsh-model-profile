@@ -4,6 +4,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { createRequire } from 'node:module'
 
 /**
  * Bundle smoke test: load the built `lib/client.js` closure factory through a
@@ -72,7 +73,9 @@ function stubCtx() {
 describe('lib/client.js bundle', () => {
   it('registers a closure factory for the plugin id and boots apply()', async () => {
     const entry = loadBundle()
-    expect(entry.id).toBe('@deepseek-ai/dsh-client-ui-model-profile')
+    // The closure id must track the package name (the shell resolves plugins by it).
+    const pkgName = createRequire(import.meta.url)('../package.json').name as string
+    expect(entry.id).toBe(pkgName)
     const exports = entry.factory(fakeRequire)
     expect(typeof exports.apply).toBe('function')
 

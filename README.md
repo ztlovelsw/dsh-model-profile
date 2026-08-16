@@ -39,6 +39,14 @@
 
 ## 安装（独立插件，不属于 dsh-web-ui-all 聚合）
 
+从 npm 安装：
+
+```sh
+dsh plugin --profile web add @ztlovelsw/dsh-model-profile
+```
+
+或本地 link 安装：
+
 ```sh
 dsh plugin --profile web add link:<本目录绝对路径>
 ```
@@ -55,7 +63,7 @@ dsh plugin --profile web add link:D:\Desktop\dsh-model-profile
 ## 卸载
 
 ```sh
-dsh plugin --profile web remove @deepseek-ai/dsh-client-ui-model-profile
+dsh plugin --profile web remove @ztlovelsw/dsh-model-profile
 ```
 
 ## 开发

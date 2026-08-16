@@ -10,7 +10,7 @@ import { existsSync } from 'node:fs'
 import { basename, dirname, relative, resolve as resolvePath, sep } from 'node:path'
 import { transform } from 'lightningcss'
 
-const ID = '@deepseek-ai/dsh-client-ui-model-profile'
+const ID = '@ztlovelsw/dsh-model-profile'
 
 /** Platform modules the dsh web shell shares into the frozen module table. */
 const PLATFORM_MODULES = [
