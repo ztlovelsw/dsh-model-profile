@@ -12,6 +12,13 @@
     "url": "https://github.com/ztlovelsw/dsh-model-profile/issues"
   },
   "homepage": "https://github.com/ztlovelsw/dsh-model-profile#readme",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "dsh-web",
+    "model-profile",
+    "reasoning-efforts"
+  ],
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"

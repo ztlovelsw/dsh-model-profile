@@ -1,5 +1,7 @@
 # dsh-model-profile · 模型能力配置（图像 + 思考等级）
 
+[![dsh-plugin](https://img.shields.io/badge/topic-dsh--plugin-8A2BE2)](https://github.com/topics/dsh-plugin)
+
 在 **「设置 → 模型」** 的模型目录编辑器里，**每个已配置模型的行内**直接加两个官方编辑器没有的控件：
 
 - **是否支持图像**：继承默认 / 支持图像（`input: ['text','image']`）/ 仅文本（`input: ['text']`）。
