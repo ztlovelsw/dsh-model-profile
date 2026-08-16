@@ -31,6 +31,7 @@ export const zh = {
   'preset.hint': '按模型 ID 查询 models.dev，命中后写入该模型的图像支持与思考等级。',
   'preset.none': 'models.dev 未收录该模型（按模型 ID 匹配），未做更改。',
   'preset.fetchFailed': '获取 models.dev 数据失败：{error}',
+  'pending.hint': '该模型尚未保存：以上选择会先暂存，待模型保存后自动写入。',
 } satisfies Record<string, string>
 
 /** The model-profile namespace key union. */
@@ -64,4 +65,5 @@ export const en: Record<ModelProfileKey, string> = {
   'preset.hint': 'Looks the model up on models.dev by id and writes its image support and reasoning levels.',
   'preset.none': 'models.dev has no entry for this model (matched by model id); nothing changed.',
   'preset.fetchFailed': 'Failed to fetch models.dev data: {error}',
+  'pending.hint': 'This model is not saved yet: choices are staged and written automatically once it is saved.',
 }

@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { ModelCapabilityController } from '../src/client/controller.ts'
 import { sweepOnce } from '../src/client/enhance.ts'
 import type { Translator } from '../src/client/enhance.ts'
@@ -13,7 +13,7 @@ import type { Translator } from '../src/client/enhance.ts'
  * that disclosure (inside the model entry) so it spans the full row width, and
  * mirrors the disclosure's open/closed state so the chevron collapses both.
  */
-function buildEditorDom(opts: { expanded: boolean }): void {
+function buildEditorDom(opts: { expanded: boolean; modelId?: string }): void {
   const editor = document.createElement('div')
   const header = document.createElement('div')
   const title = document.createElement('span')
@@ -27,7 +27,7 @@ function buildEditorDom(opts: { expanded: boolean }): void {
   const row = document.createElement('div')
   const idInput = document.createElement('input')
   idInput.type = 'text'
-  idInput.value = 'deepseek-v4-flash'
+  idInput.value = opts.modelId ?? 'deepseek-v4-flash'
   const nameInput = document.createElement('input')
   nameInput.type = 'text'
   nameInput.value = ''
@@ -141,6 +141,9 @@ describe('models-editor injection (capacity disclosure)', () => {
     expect(imageSel.value).toBe('image')
     const reasonSel = block!.querySelector('[data-mp-reason]') as HTMLSelectElement
     expect(reasonSel.value).toBe('custom')
+    // Committed row: no pre-save banner, no pending binding.
+    expect(block!.querySelector('[data-mp-pending-note]')!.hidden).toBe(true)
+    expect(block!.hasAttribute('data-mp-pending-id')).toBe(false)
   })
 
   it('does NOT inject when the capacity disclosure is collapsed (not in DOM)', async () => {
@@ -243,5 +246,124 @@ describe('models-editor injection (capacity disclosure)', () => {
 
     sweepOnce(controller, t)
     expect(document.querySelector('[data-mp-block]')).toBeNull()
+  })
+})
+
+describe('staged (unsaved) model rows — fetch-catalog adds', () => {
+  // The models.dev database the auto preset reads (fetch is stubbed below
+  // before any pending block is created; the module-level index cache then
+  // serves every later sweep in this file).
+  const STAGED_ID = 'glm-5.5-air'
+  const stubbedDb = {
+    zai: {
+      models: {
+        [STAGED_ID]: {
+          modalities: { input: ['text', 'image'] },
+          reasoning_options: [{ type: 'effort', values: ['high'] }],
+        },
+      },
+    },
+  }
+
+  it('injects a pending block with the pre-save banner for a staged row', async () => {
+    vi.stubGlobal('fetch', async () => ({ ok: true, json: async () => stubbedDb }) as Response)
+    document.body.innerHTML = ''
+    const { api, mutateCalls } = fakeApi()
+    const controller = new ModelCapabilityController(api as never)
+    await controller.load()
+    // An id models.dev does not know: the block still appears immediately.
+    buildEditorDom({ expanded: true, modelId: 'staged-unknown-model' })
+    sweepOnce(controller, t)
+
+    const block = document.querySelector('[data-mp-block]') as HTMLElement
+    expect(block).not.toBeNull()
+    expect(block.getAttribute('data-mp-pending-id')).toBe('staged-unknown-model')
+    expect(block.getAttribute('data-mp-index')).toBe('-1')
+    expect(block.querySelector('[data-mp-pending-note]')!.hidden).toBe(false)
+    // Nothing lands in settings while the row is still a draft.
+    expect(mutateCalls.length).toBe(0)
+  })
+
+  it('auto-applies the models.dev preset, stages manual edits, and lands everything after save', async () => {
+    vi.stubGlobal('fetch', async () => ({ ok: true, json: async () => stubbedDb }) as Response)
+    document.body.innerHTML = ''
+    const { api, mutateCalls, models } = fakeApi()
+    const controller = new ModelCapabilityController(api as never)
+    await controller.load()
+    buildEditorDom({ expanded: true, modelId: STAGED_ID })
+    sweepOnce(controller, t)
+
+    // The auto preset reflects in the block without any settings write.
+    await vi.waitFor(() => {
+      const imageSel = document.querySelector('[data-mp-image]') as HTMLSelectElement
+      expect(imageSel.value).toBe('image')
+      const reasonSel = document.querySelector('[data-mp-reason]') as HTMLSelectElement
+      expect(reasonSel.value).toBe('custom')
+    })
+    expect(mutateCalls.length).toBe(0)
+
+    // A manual choice on the staged row overrides the preset for that field
+    // and still writes nothing until the official editor saves.
+    const imageSel = document.querySelector('[data-mp-image]') as HTMLSelectElement
+    imageSel.value = 'text'
+    imageSel.dispatchEvent(new Event('change'))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(mutateCalls.length).toBe(0)
+
+    // The save commits the model into settings; the next load's reconcile
+    // writes the staged capabilities field by field (one whole-array set
+    // per field), each fenced by the fresh revision.
+    models.push({ id: STAGED_ID, contextWindow: 128000 })
+    await controller.load()
+    await vi.waitFor(() => expect(mutateCalls.length).toBe(2))
+    const op = mutateCalls[1].ops[0] as { op: string; path: string[]; value: unknown }
+    expect(op.op).toBe('set')
+    expect(op.path).toEqual(['providers', 'router9', 'models'])
+    expect(op.value).toEqual([
+      {
+        id: 'deepseek-v4-flash',
+        contextWindow: 1000000,
+        input: ['text', 'image'],
+        reasoningEfforts: { off: null, high: 'high' },
+      },
+      { id: 'mimo-v2.5-free' },
+      {
+        id: STAGED_ID,
+        contextWindow: 128000,
+        input: ['text'],                       // the manual override
+        reasoningEfforts: { high: 'high' },    // from the auto preset
+      },
+    ])
+
+    // Landed: the block rebinds from settings, banner gone.
+    sweepOnce(controller, t)
+    const block = document.querySelector('[data-mp-block]') as HTMLElement
+    expect(block.hasAttribute('data-mp-pending-id')).toBe(false)
+    expect(block.getAttribute('data-mp-index')).toBe('2')
+    expect(block.querySelector('[data-mp-pending-note]')!.hidden).toBe(true)
+    const landedImage = block.querySelector('[data-mp-image]') as HTMLSelectElement
+    expect(landedImage.value).toBe('text')
+  })
+
+  it('never writes a staged choice while the model stays out of settings', async () => {
+    vi.stubGlobal('fetch', async () => ({ ok: true, json: async () => stubbedDb }) as Response)
+    document.body.innerHTML = ''
+    const { api, mutateCalls } = fakeApi()
+    const controller = new ModelCapabilityController(api as never)
+    await controller.load()
+    buildEditorDom({ expanded: true, modelId: 'never-saved-model' })
+    sweepOnce(controller, t)
+    const block = document.querySelector('[data-mp-block]') as HTMLElement
+    const imageSel = block.querySelector('[data-mp-image]') as HTMLSelectElement
+    imageSel.value = 'image'
+    imageSel.dispatchEvent(new Event('change'))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(mutateCalls.length).toBe(0)
+
+    // Cancelled add: later loads (e.g. after some other write elsewhere) must
+    // keep waiting for the save — no write while the model is absent.
+    document.body.innerHTML = ''
+    await controller.load()
+    expect(mutateCalls.length).toBe(0)
   })
 })

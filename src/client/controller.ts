@@ -64,9 +64,11 @@ export class ModelCapabilityController {
    * `route\u0000modelId`. The official editor saves the whole `models` array
    * from a draft that predates these writes, so it can silently drop them;
    * after every reload {@link reconcile} re-applies any intended value that
-   * drifted. `ABSENT` means the user chose to clear the field.
+   * drifted. `ABSENT` means the user chose to clear the field. A `pending`
+   * choice belongs to a model the official editor staged (fetch-catalog add)
+   * but has not committed yet — it is kept until the save lands the model.
    */
-  private readonly intended = new Map<string, { input?: unknown; reasoningEfforts?: unknown }>()
+  private readonly intended = new Map<string, { input?: unknown; reasoningEfforts?: unknown; pending?: boolean }>()
   /** Re-entrancy guard for {@link reconcile}. */
   private reconciling = false
 
@@ -142,12 +144,16 @@ export class ModelCapabilityController {
         }
         const index = provider.models.findIndex((model) => String(model['id'] ?? '') === modelId)
         if (index < 0) {
-          this.intended.delete(key)
+          // A pending choice waits for the official editor's save to commit the
+          // model; a committed choice whose model vanished was removed by the
+          // user and must not resurrect.
+          if (!intent.pending) this.intended.delete(key)
           continue
         }
         const model = provider.models[index]
         await this.enforce(provider, index, model, 'input', intent.input)
         await this.enforce(provider, index, model, 'reasoningEfforts', intent.reasoningEfforts)
+        intent.pending = false
       }
     } finally {
       this.reconciling = false
@@ -215,6 +221,37 @@ export class ModelCapabilityController {
     const intent = this.intended.get(key) ?? {}
     intent[field] = value === undefined ? ABSENT : value
     this.intended.set(key, intent)
+  }
+
+  /**
+   * Record a capability choice for a model the official editor has staged but
+   * not committed (a fetch-catalog add drafts the row locally and lands it on
+   * save). The value rides in memory and {@link reconcile} writes it once the
+   * save commits the model into settings.
+   */
+  recordPending(info: CapabilityProvider, modelId: string, field: 'input' | 'reasoningEfforts', value: unknown): void {
+    const key = info.provider + '\u0000' + modelId
+    const intent = this.intended.get(key) ?? {}
+    intent[field] = value === undefined ? ABSENT : value
+    intent.pending = true
+    this.intended.set(key, intent)
+  }
+
+  /** Whether any capability choice (staged or landed) exists for a model id. */
+  hasIntent(info: CapabilityProvider, modelId: string): boolean {
+    return this.intended.has(info.provider + '\u0000' + modelId)
+  }
+
+  /** The staged capability fields of an unsaved model, shaped for UI display. */
+  pendingModel(info: CapabilityProvider, modelId: string): Record<string, unknown> {
+    const intent = this.intended.get(info.provider + '\u0000' + modelId)
+    const model: Record<string, unknown> = {}
+    if (intent === undefined) return model
+    for (const field of ['input', 'reasoningEfforts'] as const) {
+      const value = intent[field]
+      if (value !== undefined && value !== ABSENT) model[field] = value
+    }
+    return model
   }
 }
 

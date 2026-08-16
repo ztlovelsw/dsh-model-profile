@@ -23,7 +23,7 @@
 
 import type { CapabilityProvider, ModelCapabilityController } from './controller.ts'
 import type { ModelProfileKey } from './locales.ts'
-import { buildRowControls, syncRowControls } from './controls.ts'
+import { autoPresetForNewModel, buildRowControls, syncPendingControls, syncRowControls } from './controls.ts'
 
 /** Translate one dictionary key with optional `{name}` template params. */
 export type Translator = (key: ModelProfileKey, params?: Record<string, unknown>) => string
@@ -66,7 +66,6 @@ export function sweepOnce(controller: ModelCapabilityController, t: Translator):
     const provider = resolveProvider(controller, modelEntry)
     if (provider === undefined) return
     const index = provider.models.findIndex((model) => String(model['id'] ?? '') === modelId)
-    if (index < 0) return
     // The capability block lives inside modelEntry — a sibling of modelAdvanced —
     // so it spans the full row width (matching the model's id + display-name row
     // above) instead of being constrained to the disclosure's half-width grid.
@@ -78,7 +77,11 @@ export function sweepOnce(controller: ModelCapabilityController, t: Translator):
       if (block !== null) block.hidden = true
       return
     }
-    ensureBlock(controller, t, modelEntry, advanced, provider, index)
+    // A row whose id is not in settings yet is a staged add (the fetch-catalog
+    // flow drafts the row locally and lands it only on save). Bind it as
+    // pending — controls visible immediately, choices staged in memory and
+    // written by reconcile once the save commits the model.
+    ensureBlock(controller, t, modelEntry, advanced, provider, index, index < 0 ? modelId : '')
   })
 }
 
@@ -126,12 +129,18 @@ function resolveProvider(controller: ModelCapabilityController, from: HTMLElemen
   return undefined
 }
 
-/** Ensure the model entry carries a capability block for this provider/index. */
-function ensureBlock(controller: ModelCapabilityController, t: Translator, modelEntry: HTMLElement, advanced: HTMLElement, provider: CapabilityProvider, index: number): void {
+/**
+ * Ensure the model entry carries a capability block for this provider/index.
+ * A pending row (model not in settings yet, `pendingId` non-empty) gets the
+ * same block plus a pre-save banner, staged writes instead of direct ones,
+ * and the automatic models.dev preset applied once on creation.
+ */
+function ensureBlock(controller: ModelCapabilityController, t: Translator, modelEntry: HTMLElement, advanced: HTMLElement, provider: CapabilityProvider, index: number, pendingId = ''): void {
   let block = modelEntry.querySelector(':scope > [' + BLOCK_ATTR + ']') as HTMLElement | null
   if (block !== null) {
     const stale = block.getAttribute('data-mp-provider') !== provider.provider
       || block.getAttribute('data-mp-index') !== String(index)
+      || (block.getAttribute('data-mp-pending-id') ?? '') !== pendingId
     if (stale) {
       block.remove()
       block = null
@@ -140,13 +149,19 @@ function ensureBlock(controller: ModelCapabilityController, t: Translator, model
   if (block === null) {
     block = buildRowControls(controller, t)
     modelEntry.appendChild(block)
+    if (pendingId !== '') void autoPresetForNewModel(controller, block, provider, pendingId)
   }
   // In-DOM disclosure means expanded (collapsed content is unmounted), so the
   // block mirrors the disclosure's visibility: the chevron hides both together.
   block.hidden = advanced.hidden
   block.setAttribute('data-mp-provider', provider.provider)
   block.setAttribute('data-mp-index', String(index))
-  syncRowControls(controller, block, provider, index)
+  if (pendingId === '') block.removeAttribute('data-mp-pending-id')
+  else block.setAttribute('data-mp-pending-id', pendingId)
+  const note = block.querySelector('[data-mp-pending-note]')
+  if (note instanceof HTMLElement) note.hidden = pendingId === ''
+  if (pendingId === '') syncRowControls(controller, block, provider, index)
+  else syncPendingControls(controller, block, provider, pendingId)
 }
 
 /** Start the enhancer: mutation-driven sweeps plus a low-frequency fallback. */

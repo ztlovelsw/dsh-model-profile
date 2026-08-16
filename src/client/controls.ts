@@ -43,6 +43,14 @@ export function buildRowControls(controller: ModelCapabilityController, t: Trans
   presetBtn.title = t('preset.hint')
   titleRow.append(title, presetBtn)
 
+  // Pre-save banner: the row is staged (fetch-catalog add) and choices land
+  // only when the official editor's save commits the model.
+  const pendingNote = document.createElement('p')
+  pendingNote.className = css.hint
+  pendingNote.setAttribute('data-mp-pending-note', '')
+  pendingNote.textContent = t('pending.hint')
+  pendingNote.hidden = true
+
   const row = document.createElement('div')
   row.className = css.row
 
@@ -143,9 +151,12 @@ export function buildRowControls(controller: ModelCapabilityController, t: Trans
       delete grid.dataset.mpTouched
       // Freshly opened grid reflects the stored efforts; a switch from a
       // non-custom state starts from them too, so nothing is silently dropped.
-      const index = Number(block.getAttribute('data-mp-index') ?? '-1')
       const provider = currentProvider(controller, block)
-      if (provider !== undefined && index >= 0 && provider.models[index] !== undefined) {
+      const pendingId = block.getAttribute('data-mp-pending-id') ?? ''
+      const index = Number(block.getAttribute('data-mp-index') ?? '-1')
+      if (provider !== undefined && pendingId !== '') {
+        fillGrid(grid, storedEfforts(controller.pendingModel(provider, pendingId)))
+      } else if (provider !== undefined && index >= 0 && provider.models[index] !== undefined) {
         fillGrid(grid, storedEfforts(provider.models[index]))
       }
       refreshGridValidity(grid)
@@ -163,7 +174,7 @@ export function buildRowControls(controller: ModelCapabilityController, t: Trans
   })
 
   row.append(imageField, reasonField)
-  block.append(titleRow, row, grid, error)
+  block.append(titleRow, pendingNote, row, grid, error)
   return block
 }
 
@@ -171,13 +182,16 @@ export function buildRowControls(controller: ModelCapabilityController, t: Trans
  * Look the block's model up on models.dev and write the derived capability
  * preset. Both fields are optional: a field models.dev has no opinion on
  * (e.g. no reasoning enum) is left untouched instead of being cleared.
+ * Works both for committed rows (direct write) and staged rows (pending
+ * choice, landed by reconcile after the official editor's save).
  */
 async function applyPreset(block: HTMLElement, controller: ModelCapabilityController, t: Translator, button: HTMLButtonElement): Promise<void> {
   const provider = currentProvider(controller, block)
+  if (provider === undefined) return
+  const pendingId = block.getAttribute('data-mp-pending-id') ?? ''
   const index = Number(block.getAttribute('data-mp-index') ?? '-1')
-  const model = provider?.models[index]
-  const modelId = model === undefined ? '' : String(model['id'] ?? '')
-  if (provider === undefined || index < 0 || modelId.length === 0) return
+  const modelId = pendingId !== '' ? pendingId : String(provider.models[index]?.['id'] ?? '')
+  if (modelId.length === 0) return
   const error = block.querySelector('[data-mp-error]')
   button.disabled = true
   try {
@@ -193,7 +207,8 @@ async function applyPreset(block: HTMLElement, controller: ModelCapabilityContro
     }
     if (preset.input !== undefined) await performWrite(block, controller, t, 'input', preset.input)
     if (preset.reasoningEfforts !== undefined) await performWrite(block, controller, t, 'reasoningEfforts', preset.reasoningEfforts)
-    syncRowControls(controller, block, provider, index)
+    if (pendingId !== '') syncPendingControls(controller, block, provider, pendingId)
+    else syncRowControls(controller, block, provider, index)
   } catch (failure) {
     if (error instanceof HTMLElement) {
       error.textContent = t('preset.fetchFailed', { error: messageOf(failure) })
@@ -204,10 +219,52 @@ async function applyPreset(block: HTMLElement, controller: ModelCapabilityContro
   }
 }
 
+/** Auto-applied preset ids, so each staged model id is configured once. */
+const autoPresetDone = new Set<string>()
+
+/**
+ * Auto-apply the models.dev preset to a newly staged (unsaved) model row —
+ * the default configuration the fetch-catalog add flow wants. Runs once per
+ * provider/model id per session; a model the user already configured is left
+ * alone, and a failed fetch is silent (the manual preset button still works).
+ */
+export async function autoPresetForNewModel(controller: ModelCapabilityController, block: HTMLElement, provider: CapabilityProvider, modelId: string): Promise<void> {
+  const key = provider.provider + '\u0000' + modelId
+  if (autoPresetDone.has(key)) return
+  // Mark before awaiting: sweeps re-fire this while the fetch is in flight.
+  autoPresetDone.add(key)
+  if (controller.hasIntent(provider, modelId)) return
+  let preset: ReturnType<typeof presetOf>
+  try {
+    const found = findModel(await fetchModelsDevIndex(), modelId)
+    preset = found === undefined ? undefined : presetOf(found)
+  } catch {
+    return
+  }
+  if (preset === undefined) return
+  if (preset.input !== undefined) controller.recordPending(provider, modelId, 'input', preset.input)
+  if (preset.reasoningEfforts !== undefined) controller.recordPending(provider, modelId, 'reasoningEfforts', preset.reasoningEfforts)
+  // The binding may have changed (saved, rebound) while awaiting; only sync
+  // when the block still shows this pending row.
+  if (block.isConnected && block.getAttribute('data-mp-pending-id') === modelId) {
+    syncPendingControls(controller, block, provider, modelId)
+  }
+}
+
 /** Sync one block's controls from the committed model entry. */
 export function syncRowControls(controller: ModelCapabilityController, block: HTMLElement, provider: CapabilityProvider, index: number): void {
   const model = provider.models[index]
   if (model === undefined) return
+  syncBlockFromModel(block, model)
+}
+
+/** Sync one pre-save block from its staged capability intent. */
+export function syncPendingControls(controller: ModelCapabilityController, block: HTMLElement, provider: CapabilityProvider, modelId: string): void {
+  syncBlockFromModel(block, controller.pendingModel(provider, modelId))
+}
+
+/** Sync the selects (and custom grid) from one capability model view. */
+function syncBlockFromModel(block: HTMLElement, model: Record<string, unknown>): void {
   const imageSel = block.querySelector('[data-mp-image]')
   if (imageSel instanceof HTMLSelectElement && document.activeElement !== imageSel) {
     const mode = imageModeOf(model)
@@ -280,9 +337,17 @@ async function writeGrid(block: HTMLElement, controller: ModelCapabilityControll
 /** One field write through the controller, surfacing failures inside the block. */
 async function performWrite(block: HTMLElement, controller: ModelCapabilityController, t: Translator, field: string, value: unknown): Promise<void> {
   const provider = currentProvider(controller, block)
-  const index = Number(block.getAttribute('data-mp-index') ?? '-1')
   const error = block.querySelector('[data-mp-error]')
-  if (provider === undefined || index < 0) return
+  if (provider === undefined) return
+  const pendingId = block.getAttribute('data-mp-pending-id') ?? ''
+  if (pendingId !== '') {
+    // Pre-save row: the model is not in settings yet, so the choice is staged
+    // in memory; reconcile writes it once the save commits the model.
+    controller.recordPending(provider, pendingId, field as 'input' | 'reasoningEfforts', value)
+    return
+  }
+  const index = Number(block.getAttribute('data-mp-index') ?? '-1')
+  if (index < 0) return
   const failure = await controller.writeField(provider, index, field, value)
   if (error instanceof HTMLElement) {
     if (failure === undefined) {
