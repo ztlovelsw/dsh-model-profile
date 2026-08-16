@@ -27,6 +27,10 @@ export const zh = {
   'effort.max': 'max（最高）',
   'effort.wire': '接口取值',
   'write.failed': '写入失败：{error}',
+  'preset': '按 models.dev 预设',
+  'preset.hint': '按模型 ID 查询 models.dev，命中后写入该模型的图像支持与思考等级。',
+  'preset.none': 'models.dev 未收录该模型（按模型 ID 匹配），未做更改。',
+  'preset.fetchFailed': '获取 models.dev 数据失败：{error}',
 } satisfies Record<string, string>
 
 /** The model-profile namespace key union. */
@@ -56,4 +60,8 @@ export const en: Record<ModelProfileKey, string> = {
   'effort.max': 'max',
   'effort.wire': 'Wire value',
   'write.failed': 'Write failed: {error}',
+  'preset': 'Preset from models.dev',
+  'preset.hint': 'Looks the model up on models.dev by id and writes its image support and reasoning levels.',
+  'preset.none': 'models.dev has no entry for this model (matched by model id); nothing changed.',
+  'preset.fetchFailed': 'Failed to fetch models.dev data: {error}',
 }

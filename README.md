@@ -8,6 +8,12 @@
 - **思考等级**：继承默认 / 不支持思考（`reasoningEfforts: false`）/ 自定义等级
   （`off` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`，逐级勾选并填写接口取值）。
 
+控件块标题行有 **「按 models.dev 预设」** 按钮：按模型 ID 查询
+[models.dev](https://models.dev) 开放数据库（自动去掉网关前缀并容忍 `-high` / `-medium`
+等思考档后缀，一方厂商条目优先），命中后自动写入该模型的图像支持
+（`modalities.input`）与思考等级（`reasoning_options` 枚举，`none` → `off` 且取值为空）；
+models.dev 没有意见的字段保持原值不动。
+
 改完**即时写入**，无需重启；下一次请求即按新能力调度。
 
 ## 它解决什么

@@ -7,6 +7,7 @@
  */
 
 import type { ModelCapabilityController, CapabilityProvider } from './controller.ts'
+import { messageOf } from './controller.ts'
 import type { Translator } from './enhance.ts'
 import type { ModelProfileKey } from './locales.ts'
 import {
@@ -20,6 +21,7 @@ import {
   reasoningModeOf,
   storedEfforts,
 } from './core.ts'
+import { fetchModelsDevIndex, findModel, presetOf } from './presets.ts'
 import css from './enhance.module.css'
 
 /** Build one capability block. Provider/index travel via data attributes. */
@@ -28,9 +30,18 @@ export function buildRowControls(controller: ModelCapabilityController, t: Trans
   block.className = css.block
   block.setAttribute('data-mp-block', '')
 
+  const titleRow = document.createElement('div')
+  titleRow.className = css.titleRow
   const title = document.createElement('div')
   title.className = css.title
   title.textContent = t('block.title')
+  const presetBtn = document.createElement('button')
+  presetBtn.type = 'button'
+  presetBtn.className = css.presetBtn
+  presetBtn.setAttribute('data-mp-preset', '')
+  presetBtn.textContent = t('preset')
+  presetBtn.title = t('preset.hint')
+  titleRow.append(title, presetBtn)
 
   const row = document.createElement('div')
   row.className = css.row
@@ -147,9 +158,50 @@ export function buildRowControls(controller: ModelCapabilityController, t: Trans
   error.setAttribute('data-mp-error', '')
   error.hidden = true
 
+  presetBtn.addEventListener('click', () => {
+    void applyPreset(block, controller, t, presetBtn)
+  })
+
   row.append(imageField, reasonField)
-  block.append(title, row, grid, error)
+  block.append(titleRow, row, grid, error)
   return block
+}
+
+/**
+ * Look the block's model up on models.dev and write the derived capability
+ * preset. Both fields are optional: a field models.dev has no opinion on
+ * (e.g. no reasoning enum) is left untouched instead of being cleared.
+ */
+async function applyPreset(block: HTMLElement, controller: ModelCapabilityController, t: Translator, button: HTMLButtonElement): Promise<void> {
+  const provider = currentProvider(controller, block)
+  const index = Number(block.getAttribute('data-mp-index') ?? '-1')
+  const model = provider?.models[index]
+  const modelId = model === undefined ? '' : String(model['id'] ?? '')
+  if (provider === undefined || index < 0 || modelId.length === 0) return
+  const error = block.querySelector('[data-mp-error]')
+  button.disabled = true
+  try {
+    const db = await fetchModelsDevIndex()
+    const found = findModel(db, modelId)
+    const preset = found === undefined ? undefined : presetOf(found)
+    if (preset === undefined || (preset.input === undefined && preset.reasoningEfforts === undefined)) {
+      if (error instanceof HTMLElement) {
+        error.textContent = t('preset.none')
+        error.hidden = false
+      }
+      return
+    }
+    if (preset.input !== undefined) await performWrite(block, controller, t, 'input', preset.input)
+    if (preset.reasoningEfforts !== undefined) await performWrite(block, controller, t, 'reasoningEfforts', preset.reasoningEfforts)
+    syncRowControls(controller, block, provider, index)
+  } catch (failure) {
+    if (error instanceof HTMLElement) {
+      error.textContent = t('preset.fetchFailed', { error: messageOf(failure) })
+      error.hidden = false
+    }
+  } finally {
+    button.disabled = false
+  }
 }
 
 /** Sync one block's controls from the committed model entry. */

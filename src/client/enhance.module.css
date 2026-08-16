@@ -24,10 +24,40 @@
   display: none;
 }
 
+.titleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .title {
   font-size: 12px;
   font-weight: 600;
   color: var(--dsw-alias-label-secondary);
+}
+
+.presetBtn {
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  color: var(--dsw-alias-label-secondary);
+  background: var(--dsw-alias-bg-layer-2);
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease;
+}
+
+.presetBtn:hover:not(:disabled) {
+  border-color: var(--dsw-alias-brand-primary);
+  color: var(--dsw-alias-label-primary);
+}
+
+.presetBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .row {
