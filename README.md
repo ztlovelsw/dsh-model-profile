@@ -1,6 +1,6 @@
 **中文** · [English](README.en.md)
 
-# dsh-model-profile · 模型能力配置（图像 + 思考等级）
+# dsh-model-profile · 模型能力配置（图像 + 思考等级+上下文+最大输出）
 
 [![dsh-plugin](https://img.shields.io/badge/topic-dsh--plugin-8A2BE2)](https://github.com/topics/dsh-plugin)
 
@@ -67,7 +67,7 @@ token」输入框（走官方编辑器的草稿）。点本卡的「保存」后
   卡片在打开时会快照命名空间 revision——手动改完能力后**立即**点卡片自身的「保存」可能提示「设置已
   被改动，请关闭后重新打开」：先保存卡片的其它编辑，或关掉卡片重新打开后再保存即可。
 
-## 安装（独立插件，不属于 dsh-web-ui-all 聚合）
+## 安装
 
 从 npm 安装：
 
@@ -99,7 +99,7 @@ dsh plugin --profile web remove @ztlovelsw/dsh-model-profile
 ## 开发
 
 ```sh
-pnpm install        # 或按 dsh-web-ui 约定链接 SDK 依赖
+pnpm install       
 pnpm run build      # tsc -b（类型声明）+ tsdown（宿主/客户端 bundle）
 pnpm test           # vitest 纯逻辑单测
 ```
