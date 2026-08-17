@@ -1,3 +1,5 @@
+**中文** · [English](README.en.md)
+
 # dsh-model-profile · 模型能力配置（图像 + 思考等级）
 
 [![dsh-plugin](https://img.shields.io/badge/topic-dsh--plugin-8A2BE2)](https://github.com/topics/dsh-plugin)
