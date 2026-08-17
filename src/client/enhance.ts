@@ -213,9 +213,22 @@ function ensureBlock(controller: ModelCapabilityController, t: Translator, model
   if (pendingId === '') block.removeAttribute('data-mp-pending-id')
   else block.setAttribute('data-mp-pending-id', pendingId)
   const note = block.querySelector('[data-mp-pending-note]')
-  if (note instanceof HTMLElement) note.hidden = pendingId === ''
-  if (pendingId === '') syncRowControls(controller, block, provider, index)
-  else syncPendingControls(controller, block, provider, pendingId)
+  const modelId = pendingId !== '' ? pendingId : String(provider.models[index]?.['id'] ?? '')
+  const staged = pendingId !== '' || controller.readIntent(provider.provider, modelId)?.pending === true
+  if (note instanceof HTMLElement) {
+    // The note covers both not-yet-saved rows and committed rows whose preset
+    // is staged: values are visible but land only with the official save.
+    note.hidden = !staged
+    if (staged) note.textContent = pendingId !== '' ? t('pending.hint') : t('staged.hint')
+  }
+  // A committed row whose preset is staged (clicked but not saved yet) keeps
+  // showing the staged values until the save's reconcile lands them; committed
+  // rows without a staged intent sync from the stored model entry.
+  if (staged) {
+    syncPendingControls(controller, block, provider, modelId)
+  } else {
+    syncRowControls(controller, block, provider, index)
+  }
   // The expanded disclosure is where the official capacity inputs live; fill
   // empty ones from models.dev so the editor's save carries the preset too.
   void autoFillCapacity(block, pendingId !== '' ? pendingId : String(provider.models[index]?.['id'] ?? ''))

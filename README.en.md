@@ -12,10 +12,14 @@ In the **Settings → Models** catalog editor, two controls the official editor 
 
 The control block header has a **「Preset from models.dev」** button: it looks up the model ID in the open
 [models.dev](https://models.dev) database (automatically strips gateway prefixes and tolerates reasoning-tier
-suffixes like `-high` / `-medium`, with first-party vendor entries taking precedence). On a hit it writes the
-model's image support (`modalities.input`), reasoning level (the `reasoning_options` enum; `none` → `off` with
-an empty value), and capacity limits (`limit.context` / `limit.output` → the official inline "Context window /
-Max output tokens" inputs). Fields models.dev has no opinion about are left untouched.
+suffixes like `-high` / `-medium`, with first-party vendor entries taking precedence). On a hit it shows the
+model's image support (`modalities.input`) and reasoning level (the `reasoning_options` enum; `none` → `off`
+with an empty value) in the controls and **stages them — no write yet**; the capacity limits
+(`limit.context` / `limit.output`) are filled into the official inline "Context window / Max output tokens"
+inputs as before (they ride the official editor's draft). When you save this card, the capacity commits with
+the official draft and the plugin writes the capability fields on the settings update that follows. Not
+saved, not written — the open card's revision snapshot is never bumped out from under its own save. Fields
+models.dev has no opinion about are left untouched.
 
 **Newly added models are auto-preset from models.dev**: rows added via "Fetch available models / Add model"
 show the control block (with a "Not saved yet" banner) and apply the preset even before saving; your manual
@@ -65,6 +69,12 @@ them into inline controls, filling exactly the slot of the model catalog editor 
   routes that merely inherit from the built-in catalog, declare the models explicitly in the list first, then
   configure capabilities.
 - Capability fields are written to the user layer settings; the `modelOverrides` form is not handled for now.
+- Writes are serialized per namespace, and a `settings-conflict` (the namespace moved past the write's
+  snapshot) heals itself by reloading the join and retrying once instead of surfacing the raw error. Capability
+  fields set via "Preset from models.dev" land with the card's save and never collide with it; MANUAL control
+  changes still write immediately, and the official editor card snapshots the namespace revision when it opens
+  — after manual changes, saving that card's own edits IMMEDIATELY may still report "settings changed; close
+  and reopen". Save the card's other edits first, or close and reopen the card before saving.
 
 ## Installation (standalone plugin, not part of the dsh-web-ui-all aggregate)
 

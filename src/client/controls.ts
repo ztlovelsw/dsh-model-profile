@@ -179,11 +179,15 @@ export function buildRowControls(controller: ModelCapabilityController, t: Trans
 }
 
 /**
- * Look the block's model up on models.dev and write the derived capability
+ * Look the block's model up on models.dev and display the derived capability
  * preset. Both fields are optional: a field models.dev has no opinion on
  * (e.g. no reasoning enum) is left untouched instead of being cleared.
- * Works both for committed rows (direct write) and staged rows (pending
- * choice, landed by reconcile after the official editor's save).
+ * Capability values are STAGED, not written: like the capacity values (which
+ * fill the official editor's own inputs and ride its save), the preset lands
+ * once the official editor's save commits and the next `settings` reload's
+ * reconcile writes the staged fields. An immediate write here would bump the
+ * namespace revision behind the open card's snapshot and make the very next
+ * save report "settings changed while this card was open".
  */
 async function applyPreset(block: HTMLElement, controller: ModelCapabilityController, t: Translator, button: HTMLButtonElement): Promise<void> {
   const provider = currentProvider(controller, block)
@@ -208,8 +212,11 @@ async function applyPreset(block: HTMLElement, controller: ModelCapabilityContro
       }
       return
     }
-    if (preset.input !== undefined) await performWrite(block, controller, t, 'input', preset.input)
-    if (preset.reasoningEfforts !== undefined) await performWrite(block, controller, t, 'reasoningEfforts', preset.reasoningEfforts)
+    // Stage the capability fields for both committed and pre-save rows: the
+    // checkboxes show the preset immediately, and reconcile writes them after
+    // the official editor's save (a `settings` reload).
+    if (preset.input !== undefined) controller.recordPending(provider, modelId, 'input', preset.input)
+    if (preset.reasoningEfforts !== undefined) controller.recordPending(provider, modelId, 'reasoningEfforts', preset.reasoningEfforts)
     // Capacity fields are the official editor's own inputs: fill them so the
     // editor's draft (and its save) carries the values. Unlike the auto pass,
     // an explicit preset click overwrites whatever the inputs held.
@@ -222,8 +229,14 @@ async function applyPreset(block: HTMLElement, controller: ModelCapabilityContro
       capacityFilled.add(maxInput)
       setControlledValue(maxInput, String(preset.maxTokens))
     }
-    if (pendingId !== '') syncPendingControls(controller, block, provider, pendingId)
-    else syncRowControls(controller, block, provider, index)
+    // Mark the staged values immediately (a sweep would too); the hint names
+    // the row state — pre-save or committed-but-staged.
+    const note = block.querySelector('[data-mp-pending-note]')
+    if (note instanceof HTMLElement) {
+      note.hidden = false
+      note.textContent = pendingId !== '' ? t('pending.hint') : t('staged.hint')
+    }
+    syncPendingControls(controller, block, provider, modelId)
   } catch (failure) {
     if (error instanceof HTMLElement) {
       error.textContent = t('preset.fetchFailed', { error: messageOf(failure) })

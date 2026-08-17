@@ -30,6 +30,15 @@ export interface CapabilityProvider {
   models: Record<string, unknown>[]
 }
 
+/**
+ * What triggered a join reload. Staged (`pending`) capability choices — the
+ * "Preset from models.dev" flow and pre-save rows — only land after a `settings`
+ * reload, i.e. once the official editor's save actually committed. A reload
+ * caused by provider topology or a connection reset must not write behind an
+ * open card's back.
+ */
+export type LoadReason = 'boot' | 'settings' | 'adapters' | 'reset'
+
 /** Human text for a rejected wire call. */
 export function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -64,6 +73,8 @@ export class ModelCapabilityController {
   readonly byDraftRoute = new Map<string, CapabilityProvider>()
   /** False until the first successful join load. */
   loaded = false
+  /** Latest load trigger; staged (`pending`) choices wait for `settings`. */
+  private lastLoadReason: LoadReason = 'boot'
   /** Latest load wins; an older response never overwrites a newer one. */
   private generation = 0
   /**
@@ -78,13 +89,22 @@ export class ModelCapabilityController {
   private readonly intended = new Map<string, { input?: unknown; reasoningEfforts?: unknown; pending?: boolean }>()
   /** Re-entrancy guard for {@link reconcile}. */
   private reconciling = false
+  /**
+   * Serialized settings writes: field writes run one at a time, each reading
+   * the revision only when it reaches the front of the chain. Without this,
+   * two near-simultaneous writes (image then reasoning) both read the same
+   * `revision`, and the service — whose conflict check runs when a write
+   * reaches the front of ITS queue, not when this browser read the value —
+   * rejects the second with a `settings-conflict`.
+   */
+  private writeChain: Promise<unknown> = Promise.resolve()
 
   constructor(api: Pick<IApiClient, 'settings' | 'llm'>) {
     this.api = api
   }
 
   /** Refresh the join: provider directory + settings namespaces in parallel. */
-  async load(): Promise<void> {
+  async load(reason: LoadReason = 'boot'): Promise<void> {
     // A load means settings changed; any draft route that got committed is now
     // a real byRoute entry, and uncommitted drafts re-register on their next
     // sweep, so stale synthetics never linger.
@@ -129,6 +149,7 @@ export class ModelCapabilityController {
       for (const [key, value] of byRoute) this.byRoute.set(key, value)
       for (const [key, value] of byDisplayName) this.byDisplayName.set(key, value)
       this.loaded = true
+      this.lastLoadReason = reason
       void this.reconcile()
     } catch {
       // A failed join leaves the previous state; the next invalidation retries.
@@ -156,6 +177,10 @@ export class ModelCapabilityController {
           if (!intent.pending) this.intended.delete(key)
           continue
         }
+        // Staged (pending) choices land only after a settings write — the
+        // official editor's save committing the row, or any other commit. They
+        // must not write behind an open card on a provider-topology reload.
+        if (intent.pending && this.lastLoadReason !== 'settings') continue
         const index = provider.models.findIndex((model) => String(model['id'] ?? '') === modelId)
         if (index < 0) {
           // A pending choice waits for the official editor's save to commit the
@@ -198,34 +223,70 @@ export class ModelCapabilityController {
    * descend into arrays — an op like `…models.0.input` would replace the array
    * with an object and fail schema validation — so the write is one `set` of
    * the whole `models` array with this field patched in. Returns the failure
-   * message, or undefined once the write landed; a landed write advances the
-   * cached revision and swaps in the patched model list optimistically.
+   * message, or undefined once the write landed.
+   *
+   * Writes serialize on one chain and re-resolve the provider and model index
+   * from the freshest join when the write actually runs: a reload that swapped
+   * the entries (or shifted the rows) must not make a pending write clobber the
+   * wrong slot. When the service reports the namespace moved past the write's
+   * snapshot (`settings-conflict` — the official editor's save, or a previous
+   * write of ours, landed between this browser's read and the write's turn in
+   * the service queue), the join is reloaded and the write retried once against
+   * the fresh revision, instead of surfacing a raw conflict the user cannot act
+   * on.
    */
   async writeField(info: CapabilityProvider, index: number, field: string, value: unknown): Promise<string | undefined> {
-    // Draft providers carry a NaN revision; their rows always stage through
-    // recordPending instead. Unreachable in practice, but the invariant is
-    // explicit: an unsaved provider can never write settings.
-    if (Number.isNaN(info.revision)) return 'provider not saved yet'
     const model = info.models[index]
     if (model === undefined) return 'unknown model'
-    const patched = { ...model }
-    if (value === undefined) delete patched[field]
-    else patched[field] = value
-    const models = info.models.map((entry, i) => (i === index ? patched : entry))
-    try {
-      const response = await this.api.settings.mutate({
-        ns: info.settingsNs,
-        ops: [{ op: 'set', path: [...info.settingsPath, 'models'], value: models }],
-        expectedRevision: info.revision,
-      })
-      if (!response.result.ok) return response.result.error.message
-      info.revision = response.result.value.revision
-      info.models = models
-      this.recordIntent(info, index, field, value)
-      return undefined
-    } catch (error) {
-      return messageOf(error)
-    }
+    const modelId = String(model['id'] ?? '')
+    if (modelId.length === 0) return 'unknown model'
+    const run = this.writeChain.then(async () => {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        // Re-resolve against the newest join: `info` may predate a reload
+        // that swapped every entry, and the model index may have shifted.
+        const fresh = this.byRoute.get(info.provider) ?? info
+        if (Number.isNaN(fresh.revision)) return 'provider not saved yet'
+        const freshIndex = fresh.models.findIndex((entry) => String(entry['id'] ?? '') === modelId)
+        if (freshIndex < 0) return 'model no longer exists'
+        const patched = fresh.models.map((entry, at) => {
+          if (at !== freshIndex) return entry
+          const next = { ...entry }
+          if (value === undefined) delete next[field]
+          else next[field] = value
+          return next
+        })
+        let response: Awaited<ReturnType<IApiClient['settings']['mutate']>>
+        try {
+          response = await this.api.settings.mutate({
+            ns: fresh.settingsNs,
+            ops: [{ op: 'set', path: [...fresh.settingsPath, 'models'], value: patched }],
+            expectedRevision: fresh.revision,
+          })
+        } catch (error) {
+          return messageOf(error)
+        }
+        if (response.result.ok) {
+          fresh.revision = response.result.value.revision
+          fresh.models = patched
+          this.recordIntent(fresh, freshIndex, field, value)
+          return undefined
+        }
+        if (attempt === 0 && response.result.error.code === 'settings-conflict') {
+          // The namespace advanced past this write's snapshot: refresh the
+          // join and retry once. The reload also runs reconcile, which heals
+          // any capability a concurrent whole-array save dropped — a conflict
+          // means a write JUST happened, so staged choices may land too.
+          await this.load('settings')
+          continue
+        }
+        return response.result.error.message
+      }
+      return 'settings write still conflicting after refresh'
+    })
+    // A rejected inner write must not strand the chain; the caller still sees
+    // the failure through the awaited `run`.
+    this.writeChain = run.catch(() => undefined)
+    return run
   }
 
   /** Remember an explicit user choice so {@link reconcile} can defend it. */

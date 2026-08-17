@@ -273,6 +273,62 @@ describe('models-editor injection (capacity disclosure)', () => {
     sweepOnce(controller, t)
     expect(document.querySelector('[data-mp-block]')).toBeNull()
   })
+
+  it('stages the models.dev preset on a committed row and lands it on save', async () => {
+    document.body.innerHTML = ''
+    const { api, mutateCalls, models } = fakeApi()
+    models.push({ id: 'glm-5.5-air' })
+    const controller = new ModelCapabilityController(api as never)
+    await controller.load()
+    buildEditorDom({ expanded: true, modelId: 'glm-5.5-air' })
+    sweepOnce(controller, t)
+    const block = document.querySelector('[data-mp-block]') as HTMLElement
+    expect(block).not.toBeNull()
+    // A committed row starts clean: no write, no staged hint.
+    expect(mutateCalls.length).toBe(0)
+    expect(block.querySelector('[data-mp-pending-note]')!.hidden).toBe(true)
+
+    // The preset button shows the matched values and stages them — no write.
+    const presetBtn = block.querySelector('[data-mp-preset]') as HTMLButtonElement
+    presetBtn.click()
+    await vi.waitFor(() => {
+      expect(mutateCalls.length).toBe(0)
+      const imageSel = block.querySelector('[data-mp-image]') as HTMLSelectElement
+      expect(imageSel.value).toBe('image')
+      const reasonSel = block.querySelector('[data-mp-reason]') as HTMLSelectElement
+      expect(reasonSel.value).toBe('custom')
+    })
+    // The staged hint marks the values as landing with the card's save.
+    expect(block.querySelector('[data-mp-pending-note]')!.hidden).toBe(false)
+
+    // The official save lands them: the next settings reload writes the staged
+    // fields one whole-array set per field, fenced by the fresh revision.
+    await controller.load('settings')
+    await vi.waitFor(() => expect(mutateCalls.length).toBe(2))
+    // Both writes completed and the staged choice settled into a committed one.
+    await vi.waitFor(() => {
+      expect(controller.readIntent('router9', 'glm-5.5-air')?.pending).toBe(false)
+    })
+    const op = mutateCalls[0].ops[0] as { op: string; path: string[]; value: unknown }
+    expect(op.op).toBe('set')
+    expect(op.path).toEqual(['providers', 'router9', 'models'])
+    expect(op.value).toEqual([
+      {
+        id: 'deepseek-v4-flash',
+        contextWindow: 1000000,
+        input: ['text', 'image'],
+        reasoningEfforts: { off: null, high: 'high' },
+      },
+      { id: 'mimo-v2.5-free' },
+      { id: 'glm-5.5-air', input: ['text', 'image'] },
+    ])
+
+    // Landed: a sweep now reads the stored entry, staged hint gone.
+    sweepOnce(controller, t)
+    expect(block.querySelector('[data-mp-pending-note]')!.hidden).toBe(true)
+    const settledImage = block.querySelector('[data-mp-image]') as HTMLSelectElement
+    expect(settledImage.value).toBe('image')
+  })
 })
 
 describe('staged (unsaved) model rows — fetch-catalog adds', () => {
@@ -321,11 +377,11 @@ describe('staged (unsaved) model rows — fetch-catalog adds', () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(mutateCalls.length).toBe(0)
 
-    // The save commits the model into settings; the next load's reconcile
-    // writes the staged capabilities field by field (one whole-array set
-    // per field), each fenced by the fresh revision.
+    // The save commits the model into settings; the next settings reload's
+    // reconcile writes the staged capabilities field by field (one whole-array
+    // set per field), each fenced by the fresh revision.
     models.push({ id: STAGED_ID, contextWindow: 128000 })
-    await controller.load()
+    await controller.load('settings')
     await vi.waitFor(() => expect(mutateCalls.length).toBe(2))
     const op = mutateCalls[1].ops[0] as { op: string; path: string[]; value: unknown }
     expect(op.op).toBe('set')
@@ -502,11 +558,11 @@ describe('draft provider editor (add custom provider)', () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(mutateCalls.length).toBe(0)
 
-    // 创建提供方 commits the route with the typed models; reconcile lands
-    // both staged capabilities as whole-array writes under the new route.
+    // 创建提供方 commits the route with the typed models; the settings reload
+    // lands both staged capabilities as whole-array writes under the route.
     providers.push({ provider: DRAFT_ID, displayName: 'Acme', settingsNs: 'llm-pi-ai', settingsPath: ['providers', DRAFT_ID], active: true })
     userProviders[DRAFT_ID] = { models: [{ id: DB_MODEL, contextWindow: 64000 }] }
-    await controller.load()
+    await controller.load('settings')
     await vi.waitFor(() => expect(mutateCalls.length).toBe(2))
     for (const call of mutateCalls) {
       const op = call.ops[0] as { op: string; path: string[] }

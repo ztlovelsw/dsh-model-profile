@@ -56,16 +56,18 @@ export function apply(ctx: ClientContext): void {
   void controller.load()
 
   // Keep the join fresh: settings-document and provider-topology changes.
+  // Only a settings write (`settings` reason) may land staged capability
+  // choices — reloads for other reasons must not write behind an open card.
   ctx.effect(() => {
     const disposers = [
       ctx.remote.$on('settings/document-updated', (ns) => {
-        if (String(ns) === PI_AI_NS) void controller.load()
+        if (String(ns) === PI_AI_NS) void controller.load('settings')
       }),
       ctx.remote.$on('llm/adapters-updated', () => {
-        void controller.load()
+        void controller.load('adapters')
       }),
       ctx.on('connection/reset', () => {
-        void controller.load()
+        void controller.load('reset')
       }),
     ]
     return () => {
