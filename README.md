@@ -69,6 +69,11 @@ token」输入框（走官方编辑器的草稿）。点本卡的「保存」后
 
 ## 安装
 
+> **版本兼容**：v0.3.0 起对齐 DSH `0.1.0-rc.7` 的客户端 SDK（`@deepseek-ai/dsh-*`）。
+> 若你安装旧版本后 DSH 升级，请重新安装本插件并**重启 `dsh web`**——版本不匹配的 SDK
+> 与宿主并列安装会破坏会话作用域（表现为选择模型时 `agent-presets: refusing to compose an
+> unscoped context`）。
+
 从 npm 安装：
 
 ```sh

@@ -78,6 +78,12 @@ them into inline controls, filling exactly the slot of the model catalog editor 
 
 ## Installation (standalone plugin, not part of the dsh-web-ui-all aggregate)
 
+> **Version compatibility**: as of v0.3.0 this plugin aligns with the DSH `0.1.0-rc.7`
+> client SDK (`@deepseek-ai/dsh-*`). If you had an older build installed and then upgraded
+> DSH, reinstall this plugin and **restart `dsh web`** — a version-mismatched SDK installed
+> alongside the host breaks session scoping (surfacing as `agent-presets: refusing to compose
+> an unscoped context` when selecting a model).
+
 From npm:
 
 ```sh
