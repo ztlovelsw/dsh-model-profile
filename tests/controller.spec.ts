@@ -82,7 +82,7 @@ function makeContext(opts: {
     },
   } as const
 
-  return { controller: new ModelCapabilityController(api), mutateLog, releaseHeld: () => releaseHeld() }
+  return { controller: new ModelCapabilityController(api), mutateLog, releaseHeld: () => releaseHeld(), api }
 }
 
 describe('writeField', () => {
@@ -182,6 +182,44 @@ describe('writeField', () => {
       // Even after another settings write, the absent model keeps waiting.
       await controller.load('settings')
       expect(mutateLog).toHaveLength(0)
+    })
+
+    it('lands staged choices when a settings reload is superseded by an adapters reload', async () => {
+      // Default-gated: without the fix, a `settings` reload that loses the
+      // generation race never lands staged choices, so the official save's
+      // reasoningEfforts would be silently dropped.
+      const { controller, mutateLog, api } = makeContext({ models: [{ id: 'm1' }] })
+      await controller.load()
+      controller.recordPending(controller.byRoute.get('p1')!, 'm1', 'reasoningEfforts', { high: 'high' })
+      expect(mutateLog).toHaveLength(0)
+
+      // The official save fires settings/document-updated; its reload starts
+      // first but its describe is slow.
+      let gate: () => void = () => undefined
+      let gatePromise = new Promise<void>((resolve) => (gate = resolve))
+      const origDescribe = api.settings.describe
+      let blocked = false
+      api.settings.describe = async () => {
+        if (!blocked) {
+          blocked = true
+          await gatePromise
+        }
+        return origDescribe()
+      }
+      const settingsLoad = controller.load('settings')
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      // The later llm/adapters-updated reload completes first and supersedes it.
+      await controller.load('adapters')
+      gate()
+      await settingsLoad
+
+      // The superseded settings load no longer gates on `lastLoadReason`: the
+      // adapters reload's reconcile saw a settings write had committed and
+      // landed the staged reasoningEfforts.
+      await vi.waitFor(() => {
+        expect(controller.byRoute.get('p1')?.models[0]).toMatchObject({ reasoningEfforts: { high: 'high' } })
+      })
+      expect(controller.readIntent('p1', 'm1')).toMatchObject({ pending: false })
     })
   })
 })

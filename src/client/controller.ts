@@ -73,8 +73,21 @@ export class ModelCapabilityController {
   readonly byDraftRoute = new Map<string, CapabilityProvider>()
   /** False until the first successful join load. */
   loaded = false
-  /** Latest load trigger; staged (`pending`) choices wait for `settings`. */
-  private lastLoadReason: LoadReason = 'boot'
+  /**
+   * True once the official editor's save has committed — i.e. a `settings`
+   * reload was requested. Staged (`pending`) choices may land from then on.
+   *
+   * It is sticky (never reset) rather than the latest load reason because a
+   * `settings` reload can be superseded — by the `generation` guard dropping
+   * it, or by a later non-`settings` reload completing first and overwriting
+   * a single `lastLoadReason` field before the running reconcile reads it.
+   * Either way the save DID commit, and the reconcile that actually runs (from
+   * whatever load won) reads the post-commit revision, so backing the gate
+   * with a sticky flag keeps staged choices from being silently dropped.
+   * Landing is still one-shot per intent (see {@link reconcile}), and an
+   * uncommitted staged row stays pending until its model actually appears.
+   */
+  private sawSettings = false
   /** Latest load wins; an older response never overwrites a newer one. */
   private generation = 0
   /**
@@ -109,6 +122,10 @@ export class ModelCapabilityController {
     // a real byRoute entry, and uncommitted drafts re-register on their next
     // sweep, so stale synthetics never linger.
     this.byDraftRoute.clear()
+    // A `settings` reload is requested only after the official editor's save
+    // committed (settings/document-updated). Record it up front so the truth
+    // survives even if this load is superseded before it can set the gate.
+    if (reason === 'settings') this.sawSettings = true
     const generation = ++this.generation
     try {
       const [providersResponse, settingsResponse] = await Promise.all([
@@ -149,7 +166,6 @@ export class ModelCapabilityController {
       for (const [key, value] of byRoute) this.byRoute.set(key, value)
       for (const [key, value] of byDisplayName) this.byDisplayName.set(key, value)
       this.loaded = true
-      this.lastLoadReason = reason
       void this.reconcile()
     } catch {
       // A failed join leaves the previous state; the next invalidation retries.
@@ -179,8 +195,9 @@ export class ModelCapabilityController {
         }
         // Staged (pending) choices land only after a settings write — the
         // official editor's save committing the row, or any other commit. They
-        // must not write behind an open card on a provider-topology reload.
-        if (intent.pending && this.lastLoadReason !== 'settings') continue
+        // must not write behind an open card on a provider-topology reload that
+        // is NOT backed by a committed settings write (`sawSettings`).
+        if (intent.pending && !this.sawSettings) continue
         const index = provider.models.findIndex((model) => String(model['id'] ?? '') === modelId)
         if (index < 0) {
           // A pending choice waits for the official editor's save to commit the
