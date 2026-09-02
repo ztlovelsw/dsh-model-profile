@@ -1,18 +1,46 @@
 /**
  * The model-capability controller: joins the configurable-provider directory
- * (`llm.providers`) with the settings namespaces (`settings.describe`) and
- * writes the two per-model capability fields the official Models editor does
- * not expose — `input` (image support) and `reasoningEfforts` (thinking
- * levels) — as one whole-array `settings.mutate` `set` on the user-layer
- * `providers.<route>.models` list (the settings path walker cannot address
- * array elements), preserving every hidden field.
+ * (`remote.llm.listConfigurableProviders`) with the settings namespaces
+ * (`remote.settings.describe`) and writes the two per-model capability fields
+ * the official Models editor does not expose — `input` (image support) and
+ * `reasoningEfforts` (thinking levels) — as one whole-array
+ * `remote.settings.mutate` `set` on the user-layer `providers.<route>.models`
+ * list (the settings path walker cannot address array elements), preserving
+ * every hidden field.
  *
  * Only pi-ai provider routes whose model list the USER owns are surfaced:
  * the pi-ai schema alone declares the two fields, and a catalog-inherited
  * model list must not be silently materialized into the user layer.
  */
 
-import type { IApiClient } from '@deepseek-ai/dsh-api-remotes/client'
+import type { LlmConfigurableProvider, SettingsNamespaceView, SettingsPathOpView } from '@deepseek-ai/dsh-api-remotes/client'
+
+/**
+ * The subset of the typed Client Remote (`ctx.remote`) this controller calls.
+ * `ctx.remote.settings` / `ctx.remote.llm` (mounted by `dsh-api-remotes`) are
+ * structurally assignable to these narrow faces; they no longer route through
+ * the old `connection.api`/`IApiClient` that DSH 0.1.2-alpha.2 removed.
+ */
+
+/** One unary Remote RPC result: success value or a `{code,message}` failure. */
+type RemoteResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; error: { code: string; message: string } }
+
+/** The `remote.settings` methods the controller calls. */
+export interface SettingsRemote {
+  describe(): Promise<RemoteResult<{ writable: boolean; hasDocument: boolean; namespaces: SettingsNamespaceView[] }>>
+  mutate(
+    ns: string,
+    ops: readonly (SettingsPathOpView | { op: 'set'; path: readonly string[]; value: unknown } | { op: 'unset'; path: readonly string[] })[],
+    expectedRevision?: number,
+  ): Promise<RemoteResult<{ revision: number }>>
+}
+
+/** The `remote.llm` methods the controller calls. */
+export interface LlmRemote {
+  listConfigurableProviders(): Promise<RemoteResult<LlmConfigurableProvider[]>>
+}
 
 /** One editable pi-ai provider and its user-owned model list. */
 export interface CapabilityProvider {
@@ -28,6 +56,28 @@ export interface CapabilityProvider {
   revision: number
   /** The user-layer model entries, in stored order. */
   models: Record<string, unknown>[]
+  /**
+   * The user-layer provider profile object (the `providers.<route>` entry this
+   * provider owns). Carries the provider-scoped fields the Models editor does
+   * not expose — today just the optional `proxy` — and keeps the hidden ones
+   * (apiKeyEnv, baseURL, …) untouched by our writes.
+   */
+  profile: Record<string, unknown>
+}
+
+/**
+ * One pi-ai directory route (installed catalog or hand-declared), regardless
+ * of whether a user-layer profile exists yet — the "add provider" card offers
+ * exactly these routes, and its draft rows need a display name and settings
+ * address before the profile is written.
+ */
+export interface DirectoryEntry {
+  /** Provider route id. */
+  provider: string
+  /** Directory display name (the catalog id when nothing else names it). */
+  displayName: string
+  /** Path from the section root to the future provider profile object. */
+  settingsPath: string[]
 }
 
 /**
@@ -59,7 +109,8 @@ function getPath(value: unknown, path: readonly string[]): unknown {
  * revision-fenced field writes. One instance per browser half.
  */
 export class ModelCapabilityController {
-  private readonly api: Pick<IApiClient, 'settings' | 'llm'>
+  private readonly settings: SettingsRemote
+  private readonly llm: LlmRemote
   /** Editable providers by route id. */
   readonly byRoute = new Map<string, CapabilityProvider>()
   /** Editable providers by display name (a card header shows either). */
@@ -71,6 +122,16 @@ export class ModelCapabilityController {
    * from the DOM, not from settings). Cleared on every {@link load}.
    */
   readonly byDraftRoute = new Map<string, CapabilityProvider>()
+  /**
+   * Every pi-ai directory route keyed by route id — the union the adapter
+   * reports (installed catalog routes plus currently declared profiles),
+   * INCLUDING routes with no user-layer profile yet. The "add provider" card
+   * drafts rows for exactly those unconfigured routes; this table validates
+   * the card's route choice and supplies its display name and settings
+   * address. Unlike {@link byRoute} it says nothing about writability and
+   * never carries models. Refilled on every successful {@link load}.
+   */
+  readonly directoryByRoute = new Map<string, DirectoryEntry>()
   /** False until the first successful join load. */
   loaded = false
   /**
@@ -100,6 +161,16 @@ export class ModelCapabilityController {
    * but has not committed yet — it is kept until the save lands the model.
    */
   private readonly intended = new Map<string, { input?: unknown; reasoningEfforts?: unknown; pending?: boolean }>()
+  /**
+   * Provider-scoped choices the user explicitly made this session, keyed by
+   * route. Today only `proxy`. Like {@link intended} it survives official
+   * whole-section saves (the Models editor rebuilds the profile from a draft
+   * that predates our writes), and {@link reconcile} re-applies any drifted
+   * value. `pending` marks a choice staged for a provider whose profile is
+   * not committed yet (add-provider / add-custom flows); it lands once the
+   * official save commits the route and a `settings` reload follows.
+   */
+  private readonly providerIntents = new Map<string, { proxy?: unknown; pending?: boolean }>()
   /** Re-entrancy guard for {@link reconcile}. */
   private reconciling = false
   /**
@@ -108,12 +179,13 @@ export class ModelCapabilityController {
    * two near-simultaneous writes (image then reasoning) both read the same
    * `revision`, and the service — whose conflict check runs when a write
    * reaches the front of ITS queue, not when this browser read the value —
-   * rejects the second with a `settings-conflict`.
+   * rejects the second with a `settings/conflict`.
    */
   private writeChain: Promise<unknown> = Promise.resolve()
 
-  constructor(api: Pick<IApiClient, 'settings' | 'llm'>) {
-    this.api = api
+  constructor(settings: SettingsRemote, llm: LlmRemote) {
+    this.settings = settings
+    this.llm = llm
   }
 
   /** Refresh the join: provider directory + settings namespaces in parallel. */
@@ -129,18 +201,24 @@ export class ModelCapabilityController {
     const generation = ++this.generation
     try {
       const [providersResponse, settingsResponse] = await Promise.all([
-        this.api.llm.providers({}),
-        this.api.settings.describe({}),
+        this.llm.listConfigurableProviders(),
+        this.settings.describe(),
       ])
-      if (!providersResponse.result.ok) return
-      if (!settingsResponse.result.ok) return
+      if (!providersResponse.ok) return
+      if (!settingsResponse.ok) return
       if (generation !== this.generation) return
-      const namespaces = new Map(settingsResponse.result.value.namespaces.map((view) => [view.ns, view]))
+      const namespaces = new Map(settingsResponse.value.namespaces.map((view) => [view.ns, view]))
       const byRoute = new Map<string, CapabilityProvider>()
       const byDisplayName = new Map<string, CapabilityProvider>()
-      for (const entry of providersResponse.result.value.providers) {
+      const directory = new Map<string, DirectoryEntry>()
+      for (const entry of providersResponse.value) {
         // Only the pi-ai schema declares per-model `input`/`reasoningEfforts`.
         if (entry.settingsNs !== 'llm-pi-ai') continue
+        directory.set(entry.provider, {
+          provider: entry.provider,
+          displayName: entry.displayName,
+          settingsPath: [...entry.settingsPath],
+        })
         const namespace = namespaces.get(entry.settingsNs)
         if (namespace === undefined) continue
         const userModels = getPath(namespace.user, [...entry.settingsPath, 'models'])
@@ -150,6 +228,12 @@ export class ModelCapabilityController {
         const models = userModels.map((raw) => {
           return typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? raw as Record<string, unknown> : {}
         })
+        // The whole provider profile (the `providers.<route>` entry) the
+        // provider-scoped fields — today just `proxy` — live on.
+        const profileRaw = getPath(namespace.user, entry.settingsPath)
+        const profile = typeof profileRaw === 'object' && profileRaw !== null && !Array.isArray(profileRaw)
+          ? profileRaw as Record<string, unknown>
+          : {}
         const info: CapabilityProvider = {
           provider: entry.provider,
           displayName: entry.displayName,
@@ -157,6 +241,7 @@ export class ModelCapabilityController {
           settingsPath: [...entry.settingsPath],
           revision: namespace.revision,
           models,
+          profile,
         }
         byRoute.set(entry.provider, info)
         byDisplayName.set(entry.displayName, info)
@@ -165,6 +250,8 @@ export class ModelCapabilityController {
       this.byDisplayName.clear()
       for (const [key, value] of byRoute) this.byRoute.set(key, value)
       for (const [key, value] of byDisplayName) this.byDisplayName.set(key, value)
+      this.directoryByRoute.clear()
+      for (const [key, value] of directory) this.directoryByRoute.set(key, value)
       this.loaded = true
       void this.reconcile()
     } catch {
@@ -178,7 +265,7 @@ export class ModelCapabilityController {
    * a no-op when nothing drifted.
    */
   private async reconcile(): Promise<void> {
-    if (this.reconciling || this.intended.size === 0) return
+    if (this.reconciling || (this.intended.size === 0 && this.providerIntents.size === 0)) return
     this.reconciling = true
     try {
       for (const [key, intent] of Array.from(this.intended.entries())) {
@@ -211,6 +298,22 @@ export class ModelCapabilityController {
         await this.enforce(provider, index, model, 'reasoningEfforts', intent.reasoningEfforts)
         intent.pending = false
       }
+      for (const [route, intent] of Array.from(this.providerIntents.entries())) {
+        const provider = this.byRoute.get(route)
+        if (provider === undefined) {
+          // A pending choice may belong to a draft provider (add-custom /
+          // add-provider flows) whose route is not committed yet — keep
+          // waiting for the save. A committed choice whose provider vanished
+          // was removed by the user.
+          if (!intent.pending) this.providerIntents.delete(route)
+          continue
+        }
+        // Staged (pending) choices land only after a settings write, the same
+        // gate the model-level intents use (see above).
+        if (intent.pending && !this.sawSettings) continue
+        await this.enforceProvider(provider, 'proxy', intent.proxy)
+        intent.pending = false
+      }
     } finally {
       this.reconciling = false
     }
@@ -225,6 +328,17 @@ export class ModelCapabilityController {
       : JSON.stringify(current) !== JSON.stringify(want)
     if (!drifted) return
     await this.writeField(provider, index, field, want === ABSENT ? undefined : want)
+  }
+
+  /** Write one intended provider-scoped field back when the committed value drifted. */
+  private async enforceProvider(provider: CapabilityProvider, field: 'proxy', want: unknown): Promise<void> {
+    if (want === undefined) return
+    const current = provider.profile[field]
+    const drifted = want === ABSENT
+      ? current !== undefined
+      : JSON.stringify(current) !== JSON.stringify(want)
+    if (!drifted) return
+    await this.writeProviderField(provider, field, want === ABSENT ? undefined : want)
   }
 
   /** Resolve a card header's route or display-name text to an editable provider. */
@@ -246,7 +360,7 @@ export class ModelCapabilityController {
    * from the freshest join when the write actually runs: a reload that swapped
    * the entries (or shifted the rows) must not make a pending write clobber the
    * wrong slot. When the service reports the namespace moved past the write's
-   * snapshot (`settings-conflict` — the official editor's save, or a previous
+   * snapshot (`settings/conflict` — the official editor's save, or a previous
    * write of ours, landed between this browser's read and the write's turn in
    * the service queue), the join is reloaded and the write retried once against
    * the fresh revision, instead of surfacing a raw conflict the user cannot act
@@ -272,23 +386,23 @@ export class ModelCapabilityController {
           else next[field] = value
           return next
         })
-        let response: Awaited<ReturnType<IApiClient['settings']['mutate']>>
+        let response: Awaited<ReturnType<SettingsRemote['mutate']>>
         try {
-          response = await this.api.settings.mutate({
-            ns: fresh.settingsNs,
-            ops: [{ op: 'set', path: [...fresh.settingsPath, 'models'], value: patched }],
-            expectedRevision: fresh.revision,
-          })
+          response = await this.settings.mutate(
+            fresh.settingsNs,
+            [{ op: 'set', path: [...fresh.settingsPath, 'models'], value: patched }],
+            fresh.revision,
+          )
         } catch (error) {
           return messageOf(error)
         }
-        if (response.result.ok) {
-          fresh.revision = response.result.value.revision
+        if (response.ok) {
+          fresh.revision = response.value.revision
           fresh.models = patched
           this.recordIntent(fresh, freshIndex, field, value)
           return undefined
         }
-        if (attempt === 0 && response.result.error.code === 'settings-conflict') {
+        if (attempt === 0 && response.error.code === 'settings/conflict') {
           // The namespace advanced past this write's snapshot: refresh the
           // join and retry once. The reload also runs reconcile, which heals
           // any capability a concurrent whole-array save dropped — a conflict
@@ -296,12 +410,68 @@ export class ModelCapabilityController {
           await this.load('settings')
           continue
         }
-        return response.result.error.message
+        return response.error.message
       }
       return 'settings write still conflicting after refresh'
     })
     // A rejected inner write must not strand the chain; the caller still sees
     // the failure through the awaited `run`.
+    this.writeChain = run.catch(() => undefined)
+    return run
+  }
+
+  /**
+   * Write one provider-scoped field (today just `proxy`) at
+   * `providers.<route>.<field>`, fenced by the latest known revision. Unlike
+   * {@link writeField} the path walker CAN address a provider field — it is a
+   * plain object property, not an array element — so the write is a minimal
+   * `set` op. `undefined` unsets the field. Returns the failure message, or
+   * undefined once the write landed.
+   *
+   * A provider whose profile is not committed yet (draft route with a NaN
+   * revision, e.g. the add-provider card) cannot be written directly: the
+   * choice is staged through {@link recordProviderIntent} and lands via
+   * {@link reconcile} once the official save commits the route.
+   */
+  async writeProviderField(info: CapabilityProvider, field: 'proxy', value: unknown): Promise<string | undefined> {
+    if (Number.isNaN(info.revision)) {
+      // Draft route: no profile to write to yet. Stage the choice (pending)
+      // so reconcile lands it once the official save commits the route.
+      this.recordProviderIntent(info.provider, field, value, true)
+      return undefined
+    }
+    const run = this.writeChain.then(async () => {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const fresh = this.byRoute.get(info.provider) ?? info
+        if (Number.isNaN(fresh.revision)) return 'provider not saved yet'
+        const op = value === undefined
+          ? { op: 'unset' as const, path: [...fresh.settingsPath, field] }
+          : { op: 'set' as const, path: [...fresh.settingsPath, field], value }
+        let response: Awaited<ReturnType<SettingsRemote['mutate']>>
+        try {
+          response = await this.settings.mutate(
+            fresh.settingsNs,
+            [op],
+            fresh.revision,
+          )
+        } catch (error) {
+          return messageOf(error)
+        }
+        if (response.ok) {
+          fresh.revision = response.value.revision
+          if (value === undefined) delete fresh.profile[field]
+          else fresh.profile[field] = value
+          this.recordProviderIntent(fresh.provider, field, value)
+          return undefined
+        }
+        if (attempt === 0 && response.error.code === 'settings/conflict') {
+          await this.load('settings')
+          continue
+        }
+        return response.error.message
+      }
+      return 'settings write still conflicting after refresh'
+    })
     this.writeChain = run.catch(() => undefined)
     return run
   }
@@ -361,11 +531,57 @@ export class ModelCapabilityController {
       if (!key.startsWith(prefix)) continue
       if (this.intended.get(key)?.pending) this.intended.delete(key)
     }
+    // Provider-scoped draft choices (proxy) ride the same disowning.
+    this.evictProviderPending(route)
   }
 
   /** Read one staged or committed choice back — for tests and diagnostics. */
   readIntent(route: string, modelId: string): { input?: unknown; reasoningEfforts?: unknown; pending?: boolean } | undefined {
     return this.intended.get(route + '\u0000' + modelId)
+  }
+
+  /**
+   * Remember an explicit provider-scoped choice (today just `proxy`) so
+   * {@link reconcile} can defend it against a concurrent whole-section save.
+   * `pending` is set by {@link writeProviderField} when the route is a draft;
+   * callers staging a choice before a draft route exists pass it explicitly.
+   */
+  recordProviderIntent(route: string, field: 'proxy', value: unknown, pending = false): void {
+    const intent = this.providerIntents.get(route) ?? {}
+    intent[field] = value === undefined ? ABSENT : value
+    if (pending) intent.pending = true
+    this.providerIntents.set(route, intent)
+  }
+
+  /** Read one staged or committed provider-scoped choice back — for tests. */
+  readProviderIntent(route: string): { proxy?: unknown; pending?: boolean } | undefined {
+    return this.providerIntents.get(route)
+  }
+
+  /**
+   * Resolve the proxy state a provider proxy block should show: a staged
+   * (pending) intent wins over the committed profile until reconcile lands
+   * it, and the 'user chose to clear' sentinel resolves to disabled.
+   */
+  effectiveProviderProxy(provider: CapabilityProvider): { enabled: boolean; url: string } {
+    const intent = this.providerIntents.get(provider.provider)
+    if (intent?.pending === true) {
+      if (intent.proxy === undefined || intent.proxy === ABSENT) return { enabled: false, url: '' }
+      return { enabled: true, url: String(intent.proxy) }
+    }
+    const stored = provider.profile['proxy']
+    const enabled = typeof stored === 'string' && stored.trim().length > 0
+    return { enabled, url: enabled ? stored as string : '' }
+  }
+
+  /**
+   * Drop the pending provider-scoped choices of one draft route — the user
+   * switched or cleared the route selector, disowning everything staged under
+   * the old id (nothing must resurrect when some future provider takes it).
+   */
+  evictProviderPending(route: string): void {
+    const intent = this.providerIntents.get(route)
+    if (intent?.pending) this.providerIntents.delete(route)
   }
 }
 

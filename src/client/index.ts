@@ -6,23 +6,30 @@
  * `settings.mutate` path ops against `providers.<route>.models[<i>]` in the
  * `llm-pi-ai` namespace, preserving every hidden field the editor keeps.
  */
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
-import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
+// Type-only: pulls the `connection/reset` event and the `dsh-api-remotes`
+// `ctx.remote` namespace surface (remote.settings / remote.llm).
+import type {} from '@deepseek-ai/dsh-client-connection/client'
+import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import { ModelCapabilityController } from './controller.ts'
 import { bootEnhancer } from './enhance.ts'
 import { en, zh, type ModelProfileKey } from './locales.ts'
 
-export type { CapabilityProvider, ModelCapabilityController } from './controller.ts'
+export type { CapabilityProvider, DirectoryEntry, ModelCapabilityController } from './controller.ts'
 export type { EnhancerHandle, Translator } from './enhance.ts'
 export type { ModelProfileKey } from './locales.ts'
 export {
+  DEFAULT_PROXY_URL,
   THINKING_LEVELS,
   type ThinkingLevel,
   type UiEfforts,
   type ImageMode,
   type ReasoningMode,
+  buildProxyPayload,
+  proxyEnabled,
+  proxyUrlOf,
 } from './core.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -38,8 +45,12 @@ const NS = 'model-profile'
 /** Settings namespace the capability fields live in. */
 const PI_AI_NS = 'llm-pi-ai'
 
-/** Services required by this plugin. */
-export const inject = ['locale', 'connection', 'remote']
+/**
+ * Services required by this plugin. Each `remote.<namespace>` contribution is
+ * itself an injectable accessor in this runtime — accessing `ctx.remote.settings`
+ * / `ctx.remote.llm` requires declaring the dotted keys, not just `remote`.
+ */
+export const inject = ['locale', 'connection', 'remote', 'remote.settings', 'remote.llm']
 
 /**
  * Register the dictionaries, wire the invalidation refresh, and boot the
@@ -50,9 +61,10 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'model-profile: dictionaries')
   const t = ctx.locale.bind(NS)
 
-  const connection = ctx.get('connection') as ConnectionHandle | undefined
-  if (connection === undefined) return
-  const controller = new ModelCapabilityController(connection.api)
+  // The join and writes go through the typed Remote namespaces (`remote.settings`
+  // / `remote.llm`) that `dsh-api-remotes` mounts — the same wire the official
+  // Models page uses. DSH 0.1.2-alpha.2 removed the old `connection.api`/IApiClient.
+  const controller = new ModelCapabilityController(ctx.remote.settings, ctx.remote.llm)
   void controller.load()
 
   // Keep the join fresh: settings-document and provider-topology changes.
@@ -60,7 +72,7 @@ export function apply(ctx: ClientContext): void {
   // choices — reloads for other reasons must not write behind an open card.
   ctx.effect(() => {
     const disposers = [
-      ctx.remote.$on('settings/document-updated', (ns) => {
+      ctx.remote.$on('settings/document-updated', (ns: string) => {
         if (String(ns) === PI_AI_NS) void controller.load('settings')
       }),
       ctx.remote.$on('llm/adapters-updated', () => {

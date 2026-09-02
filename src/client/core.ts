@@ -82,3 +82,29 @@ export function buildEffortsPayload(efforts: UiEfforts): Record<string, string |
   }
   return payload
 }
+
+/**
+ * Provider proxy vocabulary: the optional per-provider `proxy` field of a
+ * pi-ai provider profile. Omission (or empty) means the route goes direct;
+ * a non-empty URL means every model on the route is reached through that
+ * proxy. Pure helpers, no runtime dependencies, unit-testable.
+ */
+
+/** Proxy URL pre-filled when the user first enables proxy on a provider. */
+export const DEFAULT_PROXY_URL = 'http://127.0.0.1:7890'
+
+/** Whether a stored provider profile has proxy enabled (a non-empty URL). */
+export function proxyEnabled(entry: Record<string, unknown>): boolean {
+  return typeof entry['proxy'] === 'string' && entry['proxy'].trim().length > 0
+}
+
+/** The stored proxy URL of a provider profile ('' when disabled). */
+export function proxyUrlOf(entry: Record<string, unknown>): string {
+  return typeof entry['proxy'] === 'string' ? entry['proxy'] : ''
+}
+
+/** The stored `proxy` value one UI state writes (undefined clears the field). */
+export function buildProxyPayload(url: string): string | undefined {
+  const trimmed = url.trim()
+  return trimmed.length === 0 ? undefined : trimmed
+}

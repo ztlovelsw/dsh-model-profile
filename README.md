@@ -23,7 +23,9 @@ token」输入框（走官方编辑器的草稿）。点本卡的「保存」后
 在保存前就会显示控件块（带「尚未保存」横幅）并自动套用预设；你的手动修改与预设
 一样先暂存，待编辑器保存落地后自动写入设置。「添加自定义提供方」同理——提供方
 尚未创建时，填好 `Provider ID` 即可对草稿模型行直接配置，点「创建提供方」后自动
-写入；重输 Provider ID 会清掉旧 id 下暂存的选择，取消则什么都不写。
+写入；重输 Provider ID 会清掉旧 id 下暂存的选择，取消则什么都不写。「添加提供方」
+（为目录路由首次定制）也同理——卡片顶部选好提供方后草稿行即时可配；切换所选
+提供方会清掉旧路由下暂存的选择。
 
 **容量（上下文窗口 / 最大输出 token）同样按 models.dev 预设**：展开任意模型行时，
 空的容量输入框会按 models.dev 的 `limit` 自动填入——只补空值，端点已披露或你手动
@@ -32,6 +34,8 @@ token」输入框（走官方编辑器的草稿）。点本卡的「保存」后
 取消则不写。
 
 改完**即时写入**，无需重启；下一次请求即按新能力调度。
+
+**为提供方配置代理**：每个已配置提供方的编辑卡片底部会多出一个「启用代理」开关（默认不勾选）；勾选后自动填入默认代理地址 `http://127.0.0.1:7890`，也可以改成自己的代理地址（HTTP/HTTPS 均可）。代理是**提供方级**设置，写入 `llm-pi-ai` 的 `providers.<route>.proxy` 字段，对该提供方下的所有模型生效。取消勾选即清除该字段、恢复直连。
 
 ## 它解决什么
 
@@ -43,7 +47,8 @@ token」输入框（走官方编辑器的草稿）。点本卡的「保存」后
 
 - **宿主端**：无行为（纯浏览器插件）。
 - **浏览器端**：
-  - `controller.ts` 复用官方 Models 页的 join（`llm.providers` + `settings.describe`），只挑出
+  - `controller.ts` 复用官方 Models 页的 join（`remote.llm.listConfigurableProviders` +
+    `remote.settings.describe`），只挑出
     `llm-pi-ai` 命名空间下、模型列表由**用户层**持有的提供方（内置目录继承的列表不会被擅自物化）。
   - `enhance.ts` 用 MutationObserver 做**与语言无关的结构探测**：以每行的高级展开按钮 + 两个文本
     输入框为行特征，顺着编辑卡头部（显示名 / route）反查所属提供方。
@@ -61,7 +66,7 @@ token」输入框（走官方编辑器的草稿）。点本卡的「保存」后
 - 只增强**用户已自定义**的模型列表（`providers.<route>.models` 在用户层存在）。仅继承内置目录的
   路由请先在模型列表里显式声明模型，再配置能力。
 - 能力字段写的是用户层设置，`modelOverrides` 形式暂不处理。
-- 写入按命名空间**串行化**，遇到并发写入导致的 revision 冲突（`settings-conflict`）会自动重新加载
+- 写入按命名空间**串行化**，遇到并发写入导致的 revision 冲突（`settings/conflict`）会自动重新加载
   join 并重试一次，不会把原始冲突抛给用户。「按 models.dev 预设」设置的能力字段会随官方卡片保存
   落地（不占用官方操作的 revision），不会与卡片保存冲突；**手动**改动控件仍是即时写入，官方编辑器
   卡片在打开时会快照命名空间 revision——手动改完能力后**立即**点卡片自身的「保存」可能提示「设置已
@@ -69,10 +74,12 @@ token」输入框（走官方编辑器的草稿）。点本卡的「保存」后
 
 ## 安装
 
-> **版本兼容**：v0.3.0 起对齐 DSH `0.1.0-rc.7` 的客户端 SDK（`@deepseek-ai/dsh-*`）。
-> 若你安装旧版本后 DSH 升级，请重新安装本插件并**重启 `dsh web`**——版本不匹配的 SDK
-> 与宿主并列安装会破坏会话作用域（表现为选择模型时 `agent-presets: refusing to compose an
-> unscoped context`）。
+> **版本兼容**：本版本对齐 DSH `0.1.2-alpha.2` 的客户端 SDK（`@deepseek-ai/dsh-*`）。
+> 客户端接入改用 `dsh-api-remotes` 挂载的 `remote.settings` / `remote.llm` 命名空间，
+> 不再依赖旧版 `connection.api` / `IApiClient`；`dsh-client-runtime` 已被移除，类型走
+> `@deepseek-ai/cordis` 的 `Context`。若你安装旧版本后 DSH 升级，请重新安装本插件并
+> **重启 `dsh web`**——版本不匹配的 SDK 与宿主并列安装会破坏会话作用域（表现为选择模型时
+> `agent-presets: refusing to compose an unscoped context`）。
 
 从 npm 安装：
 

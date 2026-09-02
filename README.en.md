@@ -26,7 +26,9 @@ show the control block (with a "Not saved yet" banner) and apply the preset even
 edits are staged just like the preset and written to settings when the editor is saved. Same for "Add custom
 provider" — when the provider doesn't exist yet, fill in `Provider ID` and configure the draft model rows
 directly; they are written once you click "Create provider". Re-entering a Provider ID clears the staged
-selections under the old id; cancel writes nothing.
+selections under the old id; cancel writes nothing. "Add provider" (first-time customization of a catalog
+route) works the same — pick the provider at the top of the card and the draft rows are configurable right
+away; switching the selected provider clears the staged selections under the previous route.
 
 **Capacity (context window / max output tokens) is likewise preset from models.dev**: expanding any model row
 auto-fills empty capacity inputs from models.dev's `limit` — only empty values, endpoint-disclosed or manually
@@ -35,6 +37,8 @@ capacity with models.dev values as well. Capacity lands through the official edi
 save/create); cancel writes nothing.
 
 Changes are written **immediately**, no restart needed; the next request is scheduled with the new capabilities.
+
+**Configure a proxy per provider**: every configured provider's editor card now has an **Enable proxy** toggle at the bottom (off by default). Checking it pre-fills the default proxy URL `http://127.0.0.1:7890`, which you can replace with your own HTTP/HTTPS proxy address. The proxy is a **provider-level** setting, written to `providers.<route>.proxy` in the `llm-pi-ai` namespace, and applies to every model on that provider. Unchecking clears the field and restores direct connections.
 
 ## What it solves
 
@@ -46,7 +50,7 @@ them into inline controls, filling exactly the slot of the model catalog editor 
 
 - **Host side**: no behavior (pure browser plugin).
 - **Browser side**:
-  - `controller.ts` reuses the official Models page join (`llm.providers` + `settings.describe`) and only picks
+  - `controller.ts` reuses the official Models page join (`remote.llm.listConfigurableProviders` + `remote.settings.describe`) and only picks
     providers under the `llm-pi-ai` namespace whose model lists are held by the **user** layer (lists inherited
     from the built-in catalog are not materialized on its own).
   - `enhance.ts` uses a MutationObserver for **language-agnostic structural detection**: rows are identified by
@@ -69,7 +73,7 @@ them into inline controls, filling exactly the slot of the model catalog editor 
   routes that merely inherit from the built-in catalog, declare the models explicitly in the list first, then
   configure capabilities.
 - Capability fields are written to the user layer settings; the `modelOverrides` form is not handled for now.
-- Writes are serialized per namespace, and a `settings-conflict` (the namespace moved past the write's
+- Writes are serialized per namespace, and a `settings/conflict` (the namespace moved past the write's
   snapshot) heals itself by reloading the join and retrying once instead of surfacing the raw error. Capability
   fields set via "Preset from models.dev" land with the card's save and never collide with it; MANUAL control
   changes still write immediately, and the official editor card snapshots the namespace revision when it opens
@@ -78,11 +82,13 @@ them into inline controls, filling exactly the slot of the model catalog editor 
 
 ## Installation (standalone plugin, not part of the dsh-web-ui-all aggregate)
 
-> **Version compatibility**: as of v0.3.0 this plugin aligns with the DSH `0.1.0-rc.7`
-> client SDK (`@deepseek-ai/dsh-*`). If you had an older build installed and then upgraded
-> DSH, reinstall this plugin and **restart `dsh web`** — a version-mismatched SDK installed
-> alongside the host breaks session scoping (surfacing as `agent-presets: refusing to compose
-> an unscoped context` when selecting a model).
+> **Version compatibility**: this version aligns with the DSH `0.1.2-alpha.2` client SDK
+> (`@deepseek-ai/dsh-*`). Client access now goes through the `remote.settings` / `remote.llm`
+> namespaces mounted by `dsh-api-remotes`, replacing the removed `connection.api` / `IApiClient`;
+> `dsh-client-runtime` was dropped in favor of `@deepseek-ai/cordis`'s `Context`. If you had an
+> older build installed and then upgraded DSH, reinstall this plugin and **restart `dsh web`** —
+> a version-mismatched SDK installed alongside the host breaks session scoping (surfacing as
+> `agent-presets: refusing to compose an unscoped context` when selecting a model).
 
 From npm:
 

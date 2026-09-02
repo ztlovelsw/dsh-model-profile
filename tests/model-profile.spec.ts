@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
+  DEFAULT_PROXY_URL,
   THINKING_LEVELS,
   buildEffortsPayload,
+  buildProxyPayload,
   effortsValid,
   imageModeOf,
   imageValueOf,
+  proxyEnabled,
+  proxyUrlOf,
   reasoningModeOf,
   storedEfforts,
 } from '../src/client/core.ts'
@@ -64,5 +68,27 @@ describe('buildEffortsPayload', () => {
 
   it('exposes the seven pi-ai levels in escalation order', () => {
     expect(THINKING_LEVELS).toEqual(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
+  })
+})
+
+describe('provider proxy', () => {
+  it('defaults to the local Clash-style proxy URL', () => {
+    expect(DEFAULT_PROXY_URL).toBe('http://127.0.0.1:7890')
+  })
+
+  it('reads enabled/url from a stored profile', () => {
+    expect(proxyEnabled({})).toBe(false)
+    expect(proxyEnabled({ proxy: '' })).toBe(false)
+    expect(proxyEnabled({ proxy: '   ' })).toBe(false)
+    expect(proxyEnabled({ proxy: 'http://127.0.0.1:7890' })).toBe(true)
+    expect(proxyUrlOf({ proxy: 'http://proxy.local:8080' })).toBe('http://proxy.local:8080')
+    expect(proxyUrlOf({})).toBe('')
+  })
+
+  it('builds the stored payload (empty clears)', () => {
+    expect(buildProxyPayload('http://127.0.0.1:7890')).toBe('http://127.0.0.1:7890')
+    expect(buildProxyPayload('  http://x:1  ')).toBe('http://x:1')
+    expect(buildProxyPayload('')).toBeUndefined()
+    expect(buildProxyPayload('   ')).toBeUndefined()
   })
 })

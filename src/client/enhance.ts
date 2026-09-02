@@ -23,7 +23,7 @@
 
 import type { CapabilityProvider, ModelCapabilityController } from './controller.ts'
 import type { ModelProfileKey } from './locales.ts'
-import { autoFillCapacity, autoPresetForNewModel, buildRowControls, syncPendingControls, syncRowControls } from './controls.ts'
+import { autoFillCapacity, autoPresetForNewModel, buildProviderProxyControls, buildRowControls, syncPendingControls, syncProviderProxyControls, syncRowControls } from './controls.ts'
 
 /** Translate one dictionary key with optional `{name}` template params. */
 export type Translator = (key: ModelProfileKey, params?: Record<string, unknown>) => string
@@ -36,6 +36,9 @@ export interface EnhancerHandle {
 
 /** Marker attribute of one injected capability block. */
 export const BLOCK_ATTR = 'data-mp-block'
+
+/** Marker attribute of one injected provider-level proxy block. */
+export const PROXY_BLOCK_ATTR = 'data-mp-proxy-block'
 
 /**
  * One synchronous detection + injection pass over the whole document.
@@ -64,9 +67,13 @@ export function sweepOnce(controller: ModelCapabilityController, t: Translator):
     const modelId = idInput.value.trim()
     if (modelId.length === 0) return
     // Draft card ("add custom provider", catalog NOT inside the customized
-    // <details>) resolves to a synthetic provider staged in byDraftRoute;
-    // the edit card keeps the header-span lookup against committed routes.
-    const provider = resolveDraftProvider(controller, modelEntry) ?? resolveProvider(controller, modelEntry)
+    // <details>) resolves to a synthetic provider staged in byDraftRoute; the
+    // "add provider" card (catalog inside <details>, route chosen by a select)
+    // resolves through its own draft path; the edit card keeps the header-span
+    // lookup against committed routes.
+    const provider = resolveDraftProvider(controller, modelEntry)
+      ?? resolveAddCardDraft(controller, modelEntry)
+      ?? resolveProvider(controller, modelEntry)
     if (provider === undefined) return
     const index = provider.models.findIndex((model) => String(model['id'] ?? '') === modelId)
     // The capability block lives inside modelEntry — a sibling of modelAdvanced —
@@ -85,6 +92,9 @@ export function sweepOnce(controller: ModelCapabilityController, t: Translator):
     // pending — controls visible immediately, choices staged in memory and
     // written by reconcile once the save commits the model.
     ensureBlock(controller, t, modelEntry, advanced, provider, index, index < 0 ? modelId : '')
+    // Provider-level proxy control lives on the provider card, not the model
+    // row — one block per provider regardless of how many rows it has.
+    ensureProviderProxy(controller, t, modelEntry, provider)
   })
 }
 
@@ -178,6 +188,82 @@ function resolveDraftProvider(controller: ModelCapabilityController, modelEntry:
     settingsPath: ['providers', route],
     revision: Number.NaN,
     models: [],
+    profile: {},
+  }
+  controller.byDraftRoute.set(route, info)
+  return info
+}
+
+/**
+ * Last draft route registered per "add provider" card select, so switching
+ * the select evicts the choices staged under the previous route. The select
+ * (not the card element) is the key: the card's editor subtree remounts when
+ * the select changes, so a card-keyed memory would forget the old route and
+ * leak its staged choices to whichever future provider takes that id.
+ */
+const addCardRoutes = new WeakMap<HTMLSelectElement, string>()
+
+/**
+ * Find the dormant-provider select of an "add provider" card, walking up a
+ * bounded ancestor chain from the model catalog's `<details>`: the first
+ * level holding EXACTLY ONE `<select>` outside every `<details>` wins. The
+ * edit/setup cards carry no select outside their customized `<details>` (a
+ * declared route's protocol select lives inside it), so they decline; the
+ * add card's chooser sits beside the editor, one level up.
+ */
+function selectOfAddCard(details: HTMLDetailsElement): HTMLSelectElement | undefined {
+  let scope: HTMLElement | null = details.parentElement
+  for (let depth = 0; scope !== null && depth < 3; depth++, scope = scope.parentElement) {
+    const selects = [...scope.querySelectorAll('select')].filter(
+      (element): element is HTMLSelectElement =>
+        element instanceof HTMLSelectElement && element.closest('details') === null,
+    )
+    if (selects.length === 1) return selects[0]
+    // More than one candidate means the structure is not understood; the
+    // single-select invariant of every known card shape is violated.
+    if (selects.length > 1) return undefined
+  }
+  return undefined
+}
+
+/**
+ * The draft provider of an "add provider" card: a catalog route being
+ * customized for the first time. Locale-free discriminators, all required:
+ * the model catalog sits INSIDE the customized `<details>` disclosure (the
+ * opposite of the custom-provider create card), no committed header resolves
+ * along the ancestor chain, and the card carries exactly one `<select>`
+ * outside that details whose value names a pi-ai directory route. A route
+ * that got committed meanwhile resolves to its real join entry instead of a
+ * synthetic; an unknown or foreign-namespace route declines. Nothing is
+ * written while the route is uncommitted — choices stage in memory and
+ * reconcile lands them once the card's save commits the profile.
+ */
+function resolveAddCardDraft(controller: ModelCapabilityController, modelEntry: HTMLElement): CapabilityProvider | undefined {
+  const catalog = modelEntry.parentElement
+  if (!(catalog instanceof HTMLElement)) return undefined
+  const details = catalog.closest('details')
+  if (!(details instanceof HTMLDetailsElement)) return undefined
+  const select = selectOfAddCard(details)
+  if (select === undefined) return undefined
+  const route = select.value.trim()
+  const entry = route.length > 0 ? controller.directoryByRoute.get(route) : undefined
+  if (entry === undefined) return undefined
+  const previous = addCardRoutes.get(select)
+  if (previous !== undefined && previous !== route) {
+    controller.evictPending(previous)
+    controller.byDraftRoute.delete(previous)
+  }
+  addCardRoutes.set(select, route)
+  const committed = controller.byRoute.get(route)
+  if (committed !== undefined) return committed
+  const info: CapabilityProvider = {
+    provider: route,
+    displayName: entry.displayName,
+    settingsNs: 'llm-pi-ai',
+    settingsPath: [...entry.settingsPath],
+    revision: Number.NaN,
+    models: [],
+    profile: {},
   }
   controller.byDraftRoute.set(route, info)
   return info
@@ -232,6 +318,59 @@ function ensureBlock(controller: ModelCapabilityController, t: Translator, model
   // The expanded disclosure is where the official capacity inputs live; fill
   // empty ones from models.dev so the editor's save carries the preset too.
   void autoFillCapacity(block, pendingId !== '' ? pendingId : String(provider.models[index]?.['id'] ?? ''))
+}
+
+
+/**
+ * The provider editor card owning a model entry — the ancestor whose header
+ * (a div whose children are all spans) names a known editable provider route
+ * or display name. Same structural walk as {@link resolveProvider}, but returns
+ * the card element too so the provider-level proxy block can be appended to it.
+ */
+function findProviderCard(controller: ModelCapabilityController, from: HTMLElement): { card: HTMLElement; provider: CapabilityProvider } | undefined {
+  let current: HTMLElement | null = from
+  for (let depth = 0; current !== null && depth < 12; depth++) {
+    const header = current.firstElementChild
+    if (header instanceof HTMLElement && header.children.length > 0 && header.children.length <= 2) {
+      const spans = Array.from(header.children)
+      if (spans.every((child) => child.tagName === 'SPAN')) {
+        for (const span of spans) {
+          const text = (span.textContent ?? '').trim()
+          if (text.length === 0) continue
+          const provider = controller.findProvider(text)
+          if (provider !== undefined) return { card: current, provider }
+        }
+      }
+    }
+    current = current.parentElement
+  }
+  return undefined
+}
+
+/**
+ * Ensure the provider editor card carries one provider-level proxy block.
+ * Idempotent: a card already carrying one is only re-synced. The block is a
+ * sibling of the card's details (after it), so it spans the card width and
+ * stays visible regardless of any per-row disclosure state.
+ */
+function ensureProviderProxy(controller: ModelCapabilityController, t: Translator, from: HTMLElement, provider: CapabilityProvider): void {
+  const found = findProviderCard(controller, from)
+  if (found === undefined) return
+  const { card } = found
+  let block = card.querySelector(':scope > [' + PROXY_BLOCK_ATTR + ']') as HTMLElement | null
+  if (block !== null) {
+    // Rebind when the card moved to another provider (a route selector switch).
+    if (block.getAttribute('data-mp-provider') !== provider.provider) {
+      block.remove()
+      block = null
+    }
+  }
+  if (block === null) {
+    block = buildProviderProxyControls(controller, t)
+    card.appendChild(block)
+  }
+  block.setAttribute('data-mp-provider', provider.provider)
+  syncProviderProxyControls(controller, block, provider)
 }
 
 /** Start the enhancer: mutation-driven sweeps plus a low-frequency fallback. */

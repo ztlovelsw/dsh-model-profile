@@ -21,68 +21,68 @@ function makeContext(opts: {
 } {
   let revision = 1
   let userModels: Array<Record<string, unknown>> = opts.models.map((model) => ({ ...model }))
-  const provider = { provider: 'p1', displayName: 'P1', settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'p1'], active: true }
+  let userProviderProfile: Record<string, unknown> = { models: userModels }
+  const provider = { provider: 'p1', displayName: 'P1', settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'p1'] }
   const mutateLog: Array<{ expectedRevision?: number; ops: Array<{ op: string; path: unknown; value: unknown }> }> = []
   let releaseHeld: () => void = () => undefined
   const held = new Promise<void>((resolve) => (releaseHeld = resolve))
 
-  const api = {
-    llm: {
-      providers: async () => ({ result: { ok: true, value: { providers: [provider] } } }),
-    },
-    settings: {
-      describe: async () => ({
-        result: {
-          ok: true,
-          value: {
-            writable: true,
-            hasDocument: true,
-            namespaces: [
-              {
-                ns: 'llm-pi-ai',
-                schema: {},
-                value: { providers: { p1: { models: userModels } } },
-                user: { providers: { p1: { models: userModels } } },
-                applies: 'live',
-                secrets: [],
-                revision,
-              },
-            ],
+  const settings = {
+    describe: async () => ({
+      ok: true as const,
+      value: {
+        writable: true,
+        hasDocument: true,
+        namespaces: [
+          {
+            ns: 'llm-pi-ai',
+            schema: {},
+            value: { providers: { p1: userProviderProfile } },
+            user: { providers: { p1: userProviderProfile } },
+            applies: 'live' as const,
+            secrets: [],
+            revision,
           },
-        },
-      }),
-      mutate: async (request: { expectedRevision?: number; ops: Array<{ op: string; path: unknown; value: unknown }> }) => {
-        mutateLog.push(request)
-        const expected = request.expectedRevision
-        if (opts.holdNth !== undefined && mutateLog.length === opts.holdNth) {
-          await held
-          // The held write still carries the revision it was dispatched with.
-        }
-        if (opts.conflictOnce === true && mutateLog.length === 1) {
-          revision = (expected ?? 0) + 1
-          return {
-            result: {
-              ok: false,
-              error: {
-                code: 'settings-conflict',
-                message: 'settings namespace "llm-pi-ai" changed since it was read',
-                details: { ns: 'llm-pi-ai', expected, actual: revision },
-              },
-            },
-          }
-        }
-        // A successful whole-array `set` persists, like the real service.
-        const op = request.ops[0]
-        if (op?.op === 'set' && op.path[op.path.length - 1] === 'models') {
-          userModels = (op.value as Array<Record<string, unknown>>).map((model) => ({ ...model }))
-        }
-        revision = (expected ?? 0) + 1
-        return { result: { ok: true, value: { revision } } }
+        ],
       },
+    }),
+    mutate: async (_ns: string, ops: Array<{ op: string; path: unknown; value: unknown }>, expectedRevision?: number) => {
+      mutateLog.push({ expectedRevision, ops })
+      const expected = expectedRevision
+      if (opts.holdNth !== undefined && mutateLog.length === opts.holdNth) {
+        await held
+        // The held write still carries the revision it was dispatched with.
+      }
+      if (opts.conflictOnce === true && mutateLog.length === 1) {
+        revision = (expected ?? 0) + 1
+        return {
+          ok: false as const,
+          error: {
+            code: 'settings/conflict',
+            message: 'settings namespace "llm-pi-ai" changed since it was read',
+          },
+        }
+      }
+      // A successful whole-array `set` persists, like the real service.
+      const op = ops[0]
+      if (op?.op === 'set' && (op.path as string[])[(op.path as string[]).length - 1] === 'models') {
+        userModels = (op.value as Array<Record<string, unknown>>).map((model) => ({ ...model }))
+        userProviderProfile = { ...userProviderProfile, models: userModels }
+      } else if (op?.op === 'set' && (op.path as string[])[(op.path as string[]).length - 1] === 'proxy') {
+        userProviderProfile = { ...userProviderProfile, proxy: op.value as string }
+      } else if (op?.op === 'unset' && (op.path as string[])[(op.path as string[]).length - 1] === 'proxy') {
+        const { proxy: _removed, ...kept } = userProviderProfile
+        userProviderProfile = kept
+      }
+      revision = (expected ?? 0) + 1
+      return { ok: true as const, value: { revision } }
     },
-  } as const
+  }
+  const llm = {
+    listConfigurableProviders: async () => ({ ok: true as const, value: [provider] }),
+  }
 
-  return { controller: new ModelCapabilityController(api), mutateLog, releaseHeld: () => releaseHeld(), api }
+  return { controller: new ModelCapabilityController(settings, llm), mutateLog, releaseHeld: () => releaseHeld(), settings }
 }
 
 describe('writeField', () => {
@@ -188,7 +188,7 @@ describe('writeField', () => {
       // Default-gated: without the fix, a `settings` reload that loses the
       // generation race never lands staged choices, so the official save's
       // reasoningEfforts would be silently dropped.
-      const { controller, mutateLog, api } = makeContext({ models: [{ id: 'm1' }] })
+      const { controller, mutateLog, settings } = makeContext({ models: [{ id: 'm1' }] })
       await controller.load()
       controller.recordPending(controller.byRoute.get('p1')!, 'm1', 'reasoningEfforts', { high: 'high' })
       expect(mutateLog).toHaveLength(0)
@@ -197,9 +197,9 @@ describe('writeField', () => {
       // first but its describe is slow.
       let gate: () => void = () => undefined
       let gatePromise = new Promise<void>((resolve) => (gate = resolve))
-      const origDescribe = api.settings.describe
+      const origDescribe = settings.describe
       let blocked = false
-      api.settings.describe = async () => {
+      settings.describe = async () => {
         if (!blocked) {
           blocked = true
           await gatePromise
@@ -221,5 +221,121 @@ describe('writeField', () => {
       })
       expect(controller.readIntent('p1', 'm1')).toMatchObject({ pending: false })
     })
+  })
+})
+
+describe('directoryByRoute (add-provider draft resolution)', () => {
+  it('records dormant catalog routes that byRoute skips, and never foreign namespaces', async () => {
+    const configured = { provider: 'p1', displayName: 'P1', settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'p1'] }
+    const dormant = { provider: 'openai', displayName: 'openai', settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'openai'] }
+    const foreign = { provider: 'deepseek-official', displayName: 'DeepSeek', settingsNs: 'llm-deepseek', settingsPath: [] as string[] }
+    const userProviders = { p1: { models: [{ id: 'm1' }] } }
+    const settings = {
+      describe: async () => ({
+        ok: true as const,
+        value: {
+          writable: true,
+          hasDocument: true,
+          namespaces: [
+            {
+              ns: 'llm-pi-ai',
+              schema: {},
+              value: { providers: userProviders },
+              user: { providers: userProviders },
+              applies: 'live' as const,
+              secrets: [] as unknown[],
+              revision: 4,
+            },
+          ],
+        },
+      }),
+    }
+    const llm = {
+      listConfigurableProviders: async () => ({ ok: true as const, value: [configured, dormant, foreign] }),
+    }
+    const controller = new ModelCapabilityController(settings, llm)
+    await controller.load()
+    // The user-owned route is editable; the dormant catalog route is not.
+    expect(controller.byRoute.has('p1')).toBe(true)
+    expect(controller.byRoute.has('openai')).toBe(false)
+    // The directory keeps BOTH pi-ai routes for add-card draft resolution,
+    // and never a route of another namespace.
+    expect(controller.directoryByRoute.get('p1')).toMatchObject({ provider: 'p1', displayName: 'P1' })
+    expect(controller.directoryByRoute.get('openai')).toMatchObject({
+      provider: 'openai',
+      displayName: 'openai',
+      settingsPath: ['providers', 'openai'],
+    })
+    expect(controller.directoryByRoute.has('deepseek-official')).toBe(false)
+  })
+})
+
+describe('writeProviderField (provider proxy)', () => {
+  it('writes the proxy field as a minimal path op and advances the cached revision', async () => {
+    const { controller, mutateLog } = makeContext({ models: [{ id: 'm1' }] })
+    await controller.load()
+    const provider = controller.byRoute.get('p1')
+    expect(provider).toBeDefined()
+    const failure = await controller.writeProviderField(provider!, 'proxy', 'http://127.0.0.1:7890')
+    expect(failure).toBeUndefined()
+    expect(mutateLog).toHaveLength(1)
+    expect(mutateLog[0]).toMatchObject({
+      expectedRevision: 1,
+      ops: [{ op: 'set', path: ['providers', 'p1', 'proxy'], value: 'http://127.0.0.1:7890' }],
+    })
+    expect(controller.byRoute.get('p1')?.revision).toBe(2)
+    expect(controller.byRoute.get('p1')?.profile.proxy).toBe('http://127.0.0.1:7890')
+  })
+
+  it('unsets the proxy field when disabled', async () => {
+    const { controller, mutateLog } = makeContext({ models: [{ id: 'm1' }] })
+    await controller.load()
+    const provider = controller.byRoute.get('p1')
+    await controller.writeProviderField(provider!, 'proxy', 'http://127.0.0.1:7890')
+    const failure = await controller.writeProviderField(provider!, 'proxy', undefined)
+    expect(failure).toBeUndefined()
+    const ops = mutateLog.map((entry) => entry.ops[0])
+    expect(ops[1]).toMatchObject({ op: 'unset', path: ['providers', 'p1', 'proxy'] })
+    expect(controller.byRoute.get('p1')?.profile.proxy).toBeUndefined()
+  })
+
+  it('stages the choice for a draft provider (NaN revision) instead of writing', async () => {
+    const { controller, mutateLog } = makeContext({ models: [{ id: 'm1' }] })
+    await controller.load()
+    const draft = {
+      provider: 'new-route',
+      displayName: 'new-route',
+      settingsNs: 'llm-pi-ai' as const,
+      settingsPath: ['providers', 'new-route'],
+      revision: Number.NaN,
+      models: [],
+      profile: {},
+    }
+    const failure = await controller.writeProviderField(draft, 'proxy', 'http://127.0.0.1:7890')
+    expect(failure).toBeUndefined()
+    expect(mutateLog).toHaveLength(0)
+    expect(controller.readProviderIntent('new-route')).toMatchObject({ proxy: 'http://127.0.0.1:7890', pending: true })
+  })
+
+  it('reconcile lands a staged provider proxy after a settings reload', async () => {
+    const { controller, mutateLog } = makeContext({ models: [{ id: 'm1' }] })
+    await controller.load()
+    const draft = {
+      provider: 'new-route',
+      displayName: 'new-route',
+      settingsNs: 'llm-pi-ai' as const,
+      settingsPath: ['providers', 'new-route'],
+      revision: Number.NaN,
+      models: [],
+      profile: {},
+    }
+    await controller.writeProviderField(draft, 'proxy', 'http://127.0.0.1:7890')
+    expect(mutateLog).toHaveLength(0)
+    // The official save commits the route; a settings reload follows.
+    // Re-load with the route now present in providers.
+    await controller.load('settings')
+    // The route is still not in byRoute (the mock providers list only has p1),
+    // so the staged choice stays pending until the route actually appears.
+    expect(controller.readProviderIntent('new-route')).toMatchObject({ pending: true })
   })
 })

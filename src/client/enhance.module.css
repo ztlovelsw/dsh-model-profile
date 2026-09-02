@@ -181,3 +181,64 @@
     transition: none;
   }
 }
+
+/* Provider-level proxy block, appended to the provider editor card (not a
+   model row). A compact row with a checkbox and a URL input. */
+.proxyBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px dashed var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-2);
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.proxyBlock[hidden] {
+  display: none;
+}
+
+.proxyRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+
+.proxyCheck {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.proxyUrl {
+  flex: 1;
+  min-width: 220px;
+  padding: 6px 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-specific-input-major);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.proxyUrl:focus-visible {
+  outline: none;
+  border-color: var(--dsw-alias-brand-primary);
+  box-shadow: 0 0 0 2px var(--dsw-alias-bg-layer-3), 0 0 0 4px var(--dsw-alias-brand-primary);
+}
+
+.proxyUrl:disabled {
+  opacity: 0.5;
+}

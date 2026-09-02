@@ -66,7 +66,7 @@ function buildEditorDom(opts: { expanded: boolean; modelId?: string; capacity?: 
   document.body.appendChild(editor)
 }
 
-function fakeApi() {
+function fakeApi(opts: { dormant?: string[]; proxy?: string } = {}) {
   const models = [
     {
       id: 'deepseek-v4-flash',
@@ -76,50 +76,54 @@ function fakeApi() {
     },
     { id: 'mimo-v2.5-free' },
   ]
-  const providers = [{
-    provider: 'router9',
-    displayName: '9router',
-    settingsNs: 'llm-pi-ai',
-    settingsPath: ['providers', 'router9'],
-    active: true,
-  }]
-  const userProviders: Record<string, { models: unknown[] }> = { router9: { models } }
-  const mutateCalls: { ns: string; ops: unknown[] }[] = []
-  const api = {
-    llm: {
-      providers: async () => ({
-        result: {
-          ok: true as const,
-          value: { providers },
-        },
-      }),
+  const providers = [
+    {
+      provider: 'router9',
+      displayName: '9router',
+      settingsNs: 'llm-pi-ai',
+      settingsPath: ['providers', 'router9'],
+      active: true,
     },
-    settings: {
-      describe: async () => ({
-        result: {
-          ok: true as const,
-          value: {
-            writable: true,
-            hasDocument: true,
-            namespaces: [{
-              ns: 'llm-pi-ai',
-              schema: {},
-              value: { providers: userProviders },
-              user: { providers: userProviders },
-              applies: 'live' as const,
-              secrets: [],
-              revision: 7,
-            }],
-          },
-        },
-      }),
-      mutate: async (request: { ns: string; ops: unknown[] }) => {
-        mutateCalls.push(request)
-        return { result: { ok: true as const, value: { revision: 8 } } }
+    // Dormant catalog routes: offered by the "add provider" card, with no
+    // user-layer profile yet — directory-only entries.
+    ...(opts.dormant ?? []).map((route) => ({
+      provider: route,
+      displayName: route,
+      settingsNs: 'llm-pi-ai',
+      settingsPath: ['providers', route],
+      active: true,
+    })),
+  ]
+  const userProviders: Record<string, { models: unknown[] }> = {
+    router9: { models, ...(opts.proxy !== undefined ? { proxy: opts.proxy } : {}) },
+  }
+  const mutateCalls: { ns: string; ops: unknown[] }[] = []
+  const settings = {
+    describe: async () => ({
+      ok: true as const,
+      value: {
+        writable: true,
+        hasDocument: true,
+        namespaces: [{
+          ns: 'llm-pi-ai',
+          schema: {},
+          value: { providers: userProviders },
+          user: { providers: userProviders },
+          applies: 'live' as const,
+          secrets: [],
+          revision: 7,
+        }],
       },
+    }),
+    mutate: async (ns: string, ops: unknown[]) => {
+      mutateCalls.push({ ns, ops })
+      return { ok: true as const, value: { revision: 8 } }
     },
   }
-  return { api, mutateCalls, models, providers, userProviders }
+  const llm = {
+    listConfigurableProviders: async () => ({ ok: true as const, value: providers }),
+  }
+  return { settings, llm, mutateCalls, models, providers, userProviders }
 }
 
 const t: Translator = ((key: string) => key) as Translator
@@ -147,8 +151,8 @@ vi.stubGlobal('fetch', async () => ({ ok: true, json: async () => SHARED_DB }) a
 describe('models-editor injection (capacity disclosure)', () => {
   it('injects the block as a disclosure sibling (full row width) when expanded', async () => {
     document.body.innerHTML = ''
-    const { api } = fakeApi()
-    const controller = new ModelCapabilityController(api as never)
+    const { settings, llm } = fakeApi()
+    const controller = new ModelCapabilityController(settings, llm)
     await controller.load()
     buildEditorDom({ expanded: true })
     sweepOnce(controller, t)
@@ -174,8 +178,8 @@ describe('models-editor injection (capacity disclosure)', () => {
 
   it('does NOT inject when the capacity disclosure is collapsed (not in DOM)', async () => {
     document.body.innerHTML = ''
-    const { api } = fakeApi()
-    const controller = new ModelCapabilityController(api as never)
+    const { settings, llm } = fakeApi()
+    const controller = new ModelCapabilityController(settings, llm)
     await controller.load()
     buildEditorDom({ expanded: false })
     sweepOnce(controller, t)
@@ -184,8 +188,8 @@ describe('models-editor injection (capacity disclosure)', () => {
 
   it('hides an existing block once the disclosure is collapsed again', async () => {
     document.body.innerHTML = ''
-    const { api } = fakeApi()
-    const controller = new ModelCapabilityController(api as never)
+    const { settings, llm } = fakeApi()
+    const controller = new ModelCapabilityController(settings, llm)
     await controller.load()
     buildEditorDom({ expanded: true })
     sweepOnce(controller, t)
@@ -211,8 +215,8 @@ describe('models-editor injection (capacity disclosure)', () => {
 
   it('writes input on image select change (block beside disclosure)', async () => {
     document.body.innerHTML = ''
-    const { api, mutateCalls } = fakeApi()
-    const controller = new ModelCapabilityController(api as never)
+    const { settings, llm, mutateCalls } = fakeApi()
+    const controller = new ModelCapabilityController(settings, llm)
     await controller.load()
     buildEditorDom({ expanded: true })
     sweepOnce(controller, t)
@@ -242,8 +246,8 @@ describe('models-editor injection (capacity disclosure)', () => {
 
   it('does not inject into an unknown provider card', async () => {
     document.body.innerHTML = ''
-    const { api } = fakeApi()
-    const controller = new ModelCapabilityController(api as never)
+    const { settings, llm } = fakeApi()
+    const controller = new ModelCapabilityController(settings, llm)
     await controller.load()
     const editor = document.createElement('div')
     const header = document.createElement('div')
@@ -276,9 +280,9 @@ describe('models-editor injection (capacity disclosure)', () => {
 
   it('stages the models.dev preset on a committed row and lands it on save', async () => {
     document.body.innerHTML = ''
-    const { api, mutateCalls, models } = fakeApi()
+    const { settings, llm, mutateCalls, models } = fakeApi()
     models.push({ id: 'glm-5.5-air' })
-    const controller = new ModelCapabilityController(api as never)
+    const controller = new ModelCapabilityController(settings, llm)
     await controller.load()
     buildEditorDom({ expanded: true, modelId: 'glm-5.5-air' })
     sweepOnce(controller, t)
@@ -336,8 +340,8 @@ describe('staged (unsaved) model rows — fetch-catalog adds', () => {
 
   it('injects a pending block with the pre-save banner for a staged row', async () => {
     document.body.innerHTML = ''
-    const { api, mutateCalls } = fakeApi()
-    const controller = new ModelCapabilityController(api as never)
+    const { settings, llm, mutateCalls } = fakeApi()
+    const controller = new ModelCapabilityController(settings, llm)
     await controller.load()
     // An id models.dev does not know: the block still appears immediately.
     buildEditorDom({ expanded: true, modelId: 'staged-unknown-model' })
@@ -354,8 +358,8 @@ describe('staged (unsaved) model rows — fetch-catalog adds', () => {
 
   it('auto-applies the models.dev preset, stages manual edits, and lands everything after save', async () => {
     document.body.innerHTML = ''
-    const { api, mutateCalls, models } = fakeApi()
-    const controller = new ModelCapabilityController(api as never)
+    const { settings, llm, mutateCalls, models } = fakeApi()
+    const controller = new ModelCapabilityController(settings, llm)
     await controller.load()
     buildEditorDom({ expanded: true, modelId: STAGED_ID })
     sweepOnce(controller, t)
@@ -414,8 +418,8 @@ describe('staged (unsaved) model rows — fetch-catalog adds', () => {
 
   it('never writes a staged choice while the model stays out of settings', async () => {
     document.body.innerHTML = ''
-    const { api, mutateCalls } = fakeApi()
-    const controller = new ModelCapabilityController(api as never)
+    const { settings, llm, mutateCalls } = fakeApi()
+    const controller = new ModelCapabilityController(settings, llm)
     await controller.load()
     buildEditorDom({ expanded: true, modelId: 'never-saved-model' })
     sweepOnce(controller, t)
@@ -518,8 +522,8 @@ describe('draft provider editor (add custom provider)', () => {
 
   it('binds a pending block to the typed Provider ID before creation', async () => {
     document.body.innerHTML = ''
-    const { api, mutateCalls } = fakeApi()
-    const controller = new ModelCapabilityController(api as never)
+    const { settings, llm, mutateCalls } = fakeApi()
+    const controller = new ModelCapabilityController(settings, llm)
     await controller.load()
     buildDraftEditorDom({ providerId: DRAFT_ID, modelId: 'draft-unknown-model' })
     sweepOnce(controller, t)
@@ -536,8 +540,8 @@ describe('draft provider editor (add custom provider)', () => {
 
   it('auto-presets, stages manual edits, and lands everything after 创建提供方', async () => {
     document.body.innerHTML = ''
-    const { api, mutateCalls, providers, userProviders } = fakeApi()
-    const controller = new ModelCapabilityController(api as never)
+    const { settings, llm, mutateCalls, providers, userProviders } = fakeApi()
+    const controller = new ModelCapabilityController(settings, llm)
     await controller.load()
     buildDraftEditorDom({ providerId: DRAFT_ID, modelId: DB_MODEL })
     sweepOnce(controller, t)
@@ -577,8 +581,8 @@ describe('draft provider editor (add custom provider)', () => {
 
   it('evicts staged choices when the Provider ID is retyped', async () => {
     document.body.innerHTML = ''
-    const { api, mutateCalls } = fakeApi()
-    const controller = new ModelCapabilityController(api as never)
+    const { settings, llm, mutateCalls } = fakeApi()
+    const controller = new ModelCapabilityController(settings, llm)
     await controller.load()
     buildDraftEditorDom({ providerId: DRAFT_ID, modelId: 'm1' })
     sweepOnce(controller, t)
@@ -600,8 +604,8 @@ describe('draft provider editor (add custom provider)', () => {
 
   it('keeps a cancelled draft unwritten across later loads', async () => {
     document.body.innerHTML = ''
-    const { api, mutateCalls } = fakeApi()
-    const controller = new ModelCapabilityController(api as never)
+    const { settings, llm, mutateCalls } = fakeApi()
+    const controller = new ModelCapabilityController(settings, llm)
     await controller.load()
     buildDraftEditorDom({ providerId: DRAFT_ID, modelId: 'm1' })
     sweepOnce(controller, t)
@@ -621,8 +625,8 @@ describe('draft provider editor (add custom provider)', () => {
 
   it('stages rows from two draft cards sharing one typed id without trampling', async () => {
     document.body.innerHTML = ''
-    const { api, mutateCalls } = fakeApi()
-    const controller = new ModelCapabilityController(api as never)
+    const { settings, llm, mutateCalls } = fakeApi()
+    const controller = new ModelCapabilityController(settings, llm)
     await controller.load()
     buildDraftEditorDom({ providerId: DRAFT_ID, modelId: 'm-a' })
     buildDraftEditorDom({ providerId: DRAFT_ID, modelId: 'm-b' })
@@ -645,15 +649,191 @@ describe('draft provider editor (add custom provider)', () => {
   })
 })
 
+/**
+ * The "add provider" editor: a DORMANT catalog route being customized for the
+ * first time. Faithful slice of the official card: the route comes from a
+ * single `<select>` OUTSIDE the customized `<details>` (the custom-provider
+ * create card has a typed Provider ID instead, and edit cards carry no select
+ * outside their details), and the ProviderEditor renders titleless under it.
+ */
+function buildAddCardDom(opts: { route: string; routes?: string[]; modelId: string }): HTMLSelectElement {
+  const addBlock = document.createElement('div')
+  const addCard = document.createElement('div')
+
+  const selectField = document.createElement('div')
+  const selectLabel = document.createElement('span')
+  selectLabel.textContent = 'Provider'
+  const select = document.createElement('select')
+  for (const route of opts.routes ?? [opts.route]) {
+    const option = document.createElement('option')
+    option.value = route
+    option.textContent = route
+    select.appendChild(option)
+  }
+  select.value = opts.route
+  selectField.append(selectLabel, select)
+
+  const editor = document.createElement('div')
+  const keyField = document.createElement('div')
+  const keyLabel = document.createElement('span')
+  keyLabel.textContent = 'API Key'
+  const keyInput = document.createElement('input')
+  keyInput.type = 'password'
+  keyField.append(keyLabel, keyInput)
+
+  const catalog = document.createElement('section')
+  const entry = document.createElement('div')
+  const row = document.createElement('div')
+  const idInput = document.createElement('input')
+  idInput.type = 'text'
+  idInput.value = opts.modelId
+  const nameInput = document.createElement('input')
+  nameInput.type = 'text'
+  const toggle = document.createElement('button')
+  toggle.type = 'button'
+  toggle.setAttribute('aria-expanded', 'true')
+  row.append(idInput, nameInput, toggle)
+  entry.appendChild(row)
+  const advanced = document.createElement('div')
+  advanced.setAttribute('data-test-advanced', '')
+  for (const label of ['Context Window', 'Max Output Tokens']) {
+    const capField = document.createElement('label')
+    const capSpan = document.createElement('span')
+    capSpan.textContent = label
+    const capInput = document.createElement('input')
+    capInput.type = 'text'
+    capInput.setAttribute('inputmode', 'numeric')
+    capField.append(capSpan, capInput)
+    advanced.appendChild(capField)
+  }
+  entry.appendChild(advanced)
+  catalog.appendChild(entry)
+
+  const customized = document.createElement('details')
+  const body = document.createElement('div')
+  const urlField = document.createElement('div')
+  const urlLabel = document.createElement('span')
+  urlLabel.textContent = 'Base URL'
+  const urlInput = document.createElement('input')
+  urlInput.type = 'text'
+  urlField.append(urlLabel, urlInput)
+  body.append(urlField, catalog)
+  customized.appendChild(body)
+
+  // The editor carries NO header (hideTitle) — resolution cannot use one.
+  editor.append(keyField, customized)
+  addCard.append(selectField, editor)
+  addBlock.appendChild(addCard)
+  document.body.appendChild(addBlock)
+  return select
+}
+
+describe('add-provider card (dormant catalog route draft)', () => {
+  const ROUTE = 'openai'
+  const DB_MODEL = 'glm-5.5-air'
+
+  it('binds a pending block to the selected catalog route before creation', async () => {
+    document.body.innerHTML = ''
+    const { settings, llm, mutateCalls } = fakeApi({ dormant: [ROUTE] })
+    const controller = new ModelCapabilityController(settings, llm)
+    await controller.load()
+    buildAddCardDom({ route: ROUTE, modelId: 'draft-unknown-model' })
+    sweepOnce(controller, t)
+
+    const block = document.querySelector('[data-mp-block]') as HTMLElement
+    expect(block).not.toBeNull()
+    expect(block.getAttribute('data-mp-provider')).toBe(ROUTE)
+    expect(block.getAttribute('data-mp-pending-id')).toBe('draft-unknown-model')
+    expect(block.getAttribute('data-mp-index')).toBe('-1')
+    expect(block.querySelector('[data-mp-pending-note]')!.hidden).toBe(false)
+    expect(mutateCalls.length).toBe(0)
+    expect(controller.byDraftRoute.get(ROUTE)).toBeDefined()
+  })
+
+  it('auto-presets, stages edits, and lands everything after the card saves', async () => {
+    document.body.innerHTML = ''
+    const { settings, llm, mutateCalls, userProviders } = fakeApi({ dormant: [ROUTE] })
+    const controller = new ModelCapabilityController(settings, llm)
+    await controller.load()
+    buildAddCardDom({ route: ROUTE, modelId: DB_MODEL })
+    sweepOnce(controller, t)
+
+    await vi.waitFor(() => {
+      const imageSel = document.querySelector('[data-mp-image]') as HTMLSelectElement
+      expect(imageSel.value).toBe('image')
+      const reasonSel = document.querySelector('[data-mp-reason]') as HTMLSelectElement
+      expect(reasonSel.value).toBe('custom')
+    })
+    expect(mutateCalls.length).toBe(0)
+
+    // The card's save commits the profile; the settings reload lands both
+    // staged capabilities as whole-array writes under the route.
+    userProviders[ROUTE] = { models: [{ id: DB_MODEL, contextWindow: 64000 }] }
+    await controller.load('settings')
+    await vi.waitFor(() => expect(mutateCalls.length).toBe(2))
+    for (const call of mutateCalls) {
+      const op = call.ops[0] as { op: string; path: string[] }
+      expect(op.op).toBe('set')
+      expect(op.path).toEqual(['providers', ROUTE, 'models'])
+    }
+
+    // A later sweep rebinds the row to the now-committed join entry.
+    sweepOnce(controller, t)
+    const rebound = document.querySelector('[data-mp-block]') as HTMLElement
+    expect(rebound.getAttribute('data-mp-provider')).toBe(ROUTE)
+    expect(rebound.hasAttribute('data-mp-pending-id')).toBe(false)
+    expect(rebound.getAttribute('data-mp-index')).toBe('0')
+  })
+
+  it('evicts staged choices when the select switches to another route', async () => {
+    document.body.innerHTML = ''
+    const other = 'groq'
+    const { settings, llm, mutateCalls } = fakeApi({ dormant: [ROUTE, other] })
+    const controller = new ModelCapabilityController(settings, llm)
+    await controller.load()
+    const select = buildAddCardDom({ route: ROUTE, routes: [ROUTE, other], modelId: 'm1' })
+    sweepOnce(controller, t)
+    const imageSel = document.querySelector('[data-mp-image]') as HTMLSelectElement
+    imageSel.value = 'image'
+    imageSel.dispatchEvent(new Event('change'))
+    expect(controller.readIntent(ROUTE, 'm1')).toBeDefined()
+
+    // Switch the dormant-route chooser: the old route's staged choices are
+    // disowned and nothing may resurrect under it.
+    select.value = other
+    sweepOnce(controller, t)
+    expect(controller.readIntent(ROUTE, 'm1')).toBeUndefined()
+    expect(controller.byDraftRoute.has(ROUTE)).toBe(false)
+    const block = document.querySelector('[data-mp-block]') as HTMLElement
+    expect(block.getAttribute('data-mp-provider')).toBe(other)
+    expect(mutateCalls.length).toBe(0)
+  })
+
+  it('declines a route the pi-ai directory does not know', async () => {
+    document.body.innerHTML = ''
+    const { settings, llm } = fakeApi({ dormant: [ROUTE] })
+    const controller = new ModelCapabilityController(settings, llm)
+    await controller.load()
+    const select = buildAddCardDom({ route: ROUTE, routes: [ROUTE], modelId: 'm1' })
+    select.innerHTML = ''
+    const option = document.createElement('option')
+    option.value = 'not-a-directory-route'
+    select.appendChild(option)
+    select.value = 'not-a-directory-route'
+    sweepOnce(controller, t)
+    expect(document.querySelector('[data-mp-block]')).toBeNull()
+  })
+})
+
 describe('capacity auto-preset (contextWindow / maxTokens)', () => {
   const capInputs = (): HTMLInputElement[] =>
     [...document.querySelectorAll('[data-test-advanced] input[inputmode="numeric"]')] as HTMLInputElement[]
 
   it('fills the empty capacity inputs of a committed row from models.dev, without writing settings', async () => {
     document.body.innerHTML = ''
-    const { api, mutateCalls, models } = fakeApi()
+    const { settings, llm, mutateCalls, models } = fakeApi()
     models.push({ id: 'glm-4.6' })
-    const controller = new ModelCapabilityController(api as never)
+    const controller = new ModelCapabilityController(settings, llm)
     await controller.load()
     buildEditorDom({ expanded: true, modelId: 'glm-4.6' })
     sweepOnce(controller, t)
@@ -667,9 +847,9 @@ describe('capacity auto-preset (contextWindow / maxTokens)', () => {
 
   it('keeps values the endpoint disclosed or the user typed', async () => {
     document.body.innerHTML = ''
-    const { api, mutateCalls, models } = fakeApi()
+    const { settings, llm, mutateCalls, models } = fakeApi()
     models.push({ id: 'glm-4.6', contextWindow: 999000 })
-    const controller = new ModelCapabilityController(api as never)
+    const controller = new ModelCapabilityController(settings, llm)
     await controller.load()
     buildEditorDom({ expanded: true, modelId: 'glm-4.6', capacity: ['999000', ''] })
     sweepOnce(controller, t)
@@ -683,9 +863,9 @@ describe('capacity auto-preset (contextWindow / maxTokens)', () => {
 
   it('does not refill an auto-filled input the user cleared', async () => {
     document.body.innerHTML = ''
-    const { api, models } = fakeApi()
+    const { settings, llm, models } = fakeApi()
     models.push({ id: 'glm-4.6' })
-    const controller = new ModelCapabilityController(api as never)
+    const controller = new ModelCapabilityController(settings, llm)
     await controller.load()
     buildEditorDom({ expanded: true, modelId: 'glm-4.6' })
     sweepOnce(controller, t)
@@ -700,8 +880,8 @@ describe('capacity auto-preset (contextWindow / maxTokens)', () => {
 
   it('fills the capacity inputs of a staged (unsaved) row too', async () => {
     document.body.innerHTML = ''
-    const { api, mutateCalls } = fakeApi()
-    const controller = new ModelCapabilityController(api as never)
+    const { settings, llm, mutateCalls } = fakeApi()
+    const controller = new ModelCapabilityController(settings, llm)
     await controller.load()
     buildEditorDom({ expanded: true, modelId: 'glm-4.6' })
     sweepOnce(controller, t)
@@ -716,9 +896,9 @@ describe('capacity auto-preset (contextWindow / maxTokens)', () => {
 
   it('the preset button overwrites non-empty capacity inputs', async () => {
     document.body.innerHTML = ''
-    const { api, mutateCalls, models } = fakeApi()
+    const { settings, llm, mutateCalls, models } = fakeApi()
     models.push({ id: 'glm-4.6', contextWindow: 111000 })
-    const controller = new ModelCapabilityController(api as never)
+    const controller = new ModelCapabilityController(settings, llm)
     await controller.load()
     buildEditorDom({ expanded: true, modelId: 'glm-4.6', capacity: ['111000', '222000'] })
     sweepOnce(controller, t)
@@ -731,5 +911,112 @@ describe('capacity auto-preset (contextWindow / maxTokens)', () => {
     expect(inputs[1].value).toBe('131072')
     // Capacity-only preset: no image/reasoning opinion, so no settings write.
     expect(mutateCalls.length).toBe(0)
+  })
+})
+
+describe('provider proxy block', () => {
+  const proxyBlock = (): HTMLElement | null => document.querySelector('[data-mp-proxy-block]')
+
+  it('injects one provider-level proxy block on the provider card', async () => {
+    document.body.innerHTML = ''
+    const { settings, llm } = fakeApi()
+    const controller = new ModelCapabilityController(settings, llm)
+    await controller.load()
+    buildEditorDom({ expanded: true })
+    sweepOnce(controller, t)
+
+    const block = proxyBlock()
+    expect(block).not.toBeNull()
+    expect(block!.getAttribute('data-mp-provider')).toBe('router9')
+    // The proxy block is a child of the provider card (not a model entry).
+    const card = block!.parentElement
+    expect(card!.querySelector('header')).toBeNull()
+    expect(card!.querySelector('[data-mp-block]')).not.toBeNull()
+  })
+
+  it('is unchecked by default with the URL input hidden', async () => {
+    document.body.innerHTML = ''
+    const { settings, llm } = fakeApi()
+    const controller = new ModelCapabilityController(settings, llm)
+    await controller.load()
+    buildEditorDom({ expanded: true })
+    sweepOnce(controller, t)
+
+    const box = document.querySelector('[data-mp-proxy-enabled]') as HTMLInputElement
+    const url = document.querySelector('[data-mp-proxy-url]') as HTMLInputElement
+    expect(box.checked).toBe(false)
+    expect(url.hidden).toBe(true)
+    expect(url.disabled).toBe(true)
+  })
+
+  it('reflects a committed proxy profile (enabled + stored URL)', async () => {
+    document.body.innerHTML = ''
+    const { settings, llm } = fakeApi({ proxy: 'http://127.0.0.1:7890' })
+    const controller = new ModelCapabilityController(settings, llm)
+    await controller.load()
+    buildEditorDom({ expanded: true })
+    sweepOnce(controller, t)
+
+    const box = document.querySelector('[data-mp-proxy-enabled]') as HTMLInputElement
+    const url = document.querySelector('[data-mp-proxy-url]') as HTMLInputElement
+    expect(box.checked).toBe(true)
+    expect(url.hidden).toBe(false)
+    expect(url.disabled).toBe(false)
+    expect(url.value).toBe('http://127.0.0.1:7890')
+  })
+
+  it('checking the box writes the default proxy URL', async () => {
+    document.body.innerHTML = ''
+    const { settings, llm, mutateCalls } = fakeApi()
+    const controller = new ModelCapabilityController(settings, llm)
+    await controller.load()
+    buildEditorDom({ expanded: true })
+    sweepOnce(controller, t)
+
+    const box = document.querySelector('[data-mp-proxy-enabled]') as HTMLInputElement
+    const url = document.querySelector('[data-mp-proxy-url]') as HTMLInputElement
+    box.click()
+    expect(box.checked).toBe(true)
+    expect(url.value).toBe('http://127.0.0.1:7890')
+    await vi.waitFor(() => expect(mutateCalls.length).toBe(1))
+    expect(mutateCalls[0]).toMatchObject({
+      ns: 'llm-pi-ai',
+      ops: [{ op: 'set', path: ['providers', 'router9', 'proxy'], value: 'http://127.0.0.1:7890' }],
+    })
+  })
+
+  it('writes a custom proxy URL when the user edits the field', async () => {
+    document.body.innerHTML = ''
+    const { settings, llm, mutateCalls } = fakeApi()
+    const controller = new ModelCapabilityController(settings, llm)
+    await controller.load()
+    buildEditorDom({ expanded: true })
+    sweepOnce(controller, t)
+
+    const box = document.querySelector('[data-mp-proxy-enabled]') as HTMLInputElement
+    const url = document.querySelector('[data-mp-proxy-url]') as HTMLInputElement
+    box.click()
+    url.value = 'http://my-proxy.local:8080'
+    url.dispatchEvent(new Event('change'))
+    await vi.waitFor(() => expect(mutateCalls.length).toBe(2))
+    expect(mutateCalls[1]).toMatchObject({
+      ops: [{ op: 'set', path: ['providers', 'router9', 'proxy'], value: 'http://my-proxy.local:8080' }],
+    })
+  })
+
+  it('unchecking the box writes an unset (clears the field)', async () => {
+    document.body.innerHTML = ''
+    const { settings, llm, mutateCalls } = fakeApi({ proxy: 'http://127.0.0.1:7890' })
+    const controller = new ModelCapabilityController(settings, llm)
+    await controller.load()
+    buildEditorDom({ expanded: true })
+    sweepOnce(controller, t)
+
+    const box = document.querySelector('[data-mp-proxy-enabled]') as HTMLInputElement
+    box.click()
+    await vi.waitFor(() => expect(mutateCalls.length).toBe(1))
+    expect(mutateCalls[0]).toMatchObject({
+      ops: [{ op: 'unset', path: ['providers', 'router9', 'proxy'] }],
+    })
   })
 })

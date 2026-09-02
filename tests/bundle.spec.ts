@@ -37,34 +37,29 @@ function loadBundle() {
 }
 
 function fakeRequire(specifier: string): Record<string, unknown> {
-  // The bundle's external module-table entries. apply() only needs locale +
-  // connection + remote + runtime shapes; provide permissive stubs.
+  // The bundle's external module-table entries. apply() only touches locale,
+  // connection, and remote; provide permissive stubs for each.
   if (specifier === '@deepseek-ai/dsh-client-locale/client') return {}
   if (specifier === '@deepseek-ai/dsh-client-connection/client') return {}
-  if (specifier === '@deepseek-ai/dsh-client-runtime/client') {
-    return {}
-  }
+  if (specifier === '@deepseek-ai/dsh-api-remotes/client') return {}
   return {}
 }
 
 function stubCtx() {
   const mutateCalls: unknown[] = []
   const models = [{ id: 'm1', input: ['text', 'image'] }]
-  const api = {
-    llm: {
-      providers: async () => ({ result: { ok: true, value: { providers: [{ provider: 'p1', displayName: 'P1', settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'p1'], active: true }] } } }),
-    },
-    settings: {
-      describe: async () => ({ result: { ok: true, value: { writable: true, hasDocument: true, namespaces: [{ ns: 'llm-pi-ai', schema: {}, value: { providers: { p1: { models } } }, user: { providers: { p1: { models } } }, applies: 'live', secrets: [], revision: 1 }] } } }),
-      mutate: async (req: unknown) => { mutateCalls.push(req); return { result: { ok: true, value: { revision: 2 } } } },
-    },
+  const settings = {
+    describe: async () => ({ ok: true, value: { writable: true, hasDocument: true, namespaces: [{ ns: 'llm-pi-ai', schema: {}, value: { providers: { p1: { models } } }, user: { providers: { p1: { models } } }, applies: 'live', secrets: [], revision: 1 }] } }),
+    mutate: async (ns: string, ops: unknown) => { mutateCalls.push({ ns, ops }); return { ok: true, value: { revision: 2 } } },
+  }
+  const llm = {
+    listConfigurableProviders: async () => ({ ok: true, value: [{ provider: 'p1', displayName: 'P1', settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'p1'] }] }),
   }
   const effects: Array<() => void> = []
   const ctx = {
     effect(fn: () => void) { effects.push(fn) },
     locale: { register: () => () => {}, bind: () => (k: string) => k },
-    get: (name: string) => (name === 'connection' ? { api } : undefined),
-    remote: { $on: () => () => {} },
+    remote: { $on: () => () => {}, settings, llm },
     on: () => () => {},
   }
   return { ctx, runEffects: () => { for (const fn of effects) fn() }, mutateCalls }

@@ -11,13 +11,17 @@ import { messageOf } from './controller.ts'
 import type { Translator } from './enhance.ts'
 import type { ModelProfileKey } from './locales.ts'
 import {
+  DEFAULT_PROXY_URL,
   THINKING_LEVELS,
   type ThinkingLevel,
   type UiEfforts,
   buildEffortsPayload,
+  buildProxyPayload,
   effortsValid,
   imageModeOf,
   imageValueOf,
+  proxyEnabled,
+  proxyUrlOf,
   reasoningModeOf,
   storedEfforts,
 } from './core.ts'
@@ -457,3 +461,104 @@ function appendOptions(select: HTMLSelectElement, options: [string, string][]): 
     select.appendChild(option)
   }
 }
+
+/**
+ * Build one provider-level proxy block: a checkbox ("enable proxy") and a URL
+ * input that appears once the checkbox is checked. Unlike the per-model
+ * capability block, this is appended to the PROVIDER editor card (not a model
+ * row) and writes the provider-scoped `providers.<route>.proxy` field. The
+ * provider travels via `data-mp-provider`; there is no per-row index.
+ */
+export function buildProviderProxyControls(controller: ModelCapabilityController, t: Translator): HTMLElement {
+  const block = document.createElement('div')
+  block.className = css.proxyBlock
+  block.setAttribute('data-mp-proxy-block', '')
+
+  const row = document.createElement('div')
+  row.className = css.proxyRow
+
+  const check = document.createElement('label')
+  check.className = css.proxyCheck
+  const box = document.createElement('input')
+  box.type = 'checkbox'
+  box.setAttribute('data-mp-proxy-enabled', '')
+  const name = document.createElement('span')
+  name.textContent = t('proxy.enable')
+  check.append(box, name)
+
+  const url = document.createElement('input')
+  url.type = 'text'
+  url.className = css.proxyUrl
+  url.setAttribute('data-mp-proxy-url', '')
+  url.placeholder = t('proxy.urlPlaceholder')
+  url.title = t('proxy.hint')
+  url.disabled = true
+  url.hidden = true
+
+  const error = document.createElement('p')
+  error.className = css.error
+  error.setAttribute('data-mp-proxy-error', '')
+  error.hidden = true
+
+  // Enabling proxy pre-fills the default URL once (unless a custom URL is
+  // already typed); disabling clears the stored field and hides the input.
+  box.addEventListener('change', () => {
+    const provider = currentProvider(controller, block)
+    if (provider === undefined) return
+    if (box.checked) {
+      if (url.value.trim().length === 0) url.value = DEFAULT_PROXY_URL
+      url.disabled = false
+      url.hidden = false
+      void performProxyWrite(block, controller, t, url)
+    } else {
+      url.disabled = true
+      url.hidden = true
+      void performProxyWrite(block, controller, t, url)
+    }
+  })
+  url.addEventListener('change', () => {
+    void performProxyWrite(block, controller, t, url)
+  })
+
+  row.append(check, url)
+  block.append(row, error)
+  return block
+}
+
+/** Sync one provider proxy block from the committed/staged provider profile. */
+export function syncProviderProxyControls(controller: ModelCapabilityController, block: HTMLElement, provider: CapabilityProvider): void {
+  const box = block.querySelector('[data-mp-proxy-enabled]')
+  const url = block.querySelector('[data-mp-proxy-url]')
+  if (!(box instanceof HTMLInputElement) || !(url instanceof HTMLInputElement)) return
+  // The controller resolves the effective state: a staged (pending) intent
+  // wins over the committed profile until reconcile lands it, and it owns
+  // the "user chose to clear" sentinel.
+  const proxy = controller.effectiveProviderProxy(provider)
+  if (document.activeElement !== box) box.checked = proxy.enabled
+  if (document.activeElement !== url) url.value = proxy.enabled ? proxy.url : ''
+  url.disabled = !proxy.enabled
+  url.hidden = !proxy.enabled
+}
+
+/**
+ * Write the provider proxy state through the controller, surfacing failures
+ * inside the block.
+ */
+async function performProxyWrite(block: HTMLElement, controller: ModelCapabilityController, t: Translator, url: HTMLInputElement): Promise<void> {
+  const provider = currentProvider(controller, block)
+  const error = block.querySelector('[data-mp-proxy-error]')
+  if (provider === undefined) return
+  const box = block.querySelector('[data-mp-proxy-enabled]')
+  const enabled = box instanceof HTMLInputElement && box.checked
+  const value = enabled ? buildProxyPayload(url.value) : undefined
+  const failure = await controller.writeProviderField(provider, 'proxy', value)
+  if (error instanceof HTMLElement) {
+    if (failure === undefined) {
+      error.hidden = true
+    } else {
+      error.textContent = t('write.failed', { error: failure })
+      error.hidden = false
+    }
+  }
+}
+
