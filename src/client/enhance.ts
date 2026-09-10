@@ -23,7 +23,7 @@
 
 import type { CapabilityProvider, ModelCapabilityController } from './controller.ts'
 import type { ModelProfileKey } from './locales.ts'
-import { autoFillCapacity, autoPresetForNewModel, buildProviderProxyControls, buildRowControls, syncPendingControls, syncProviderProxyControls, syncRowControls } from './controls.ts'
+import { autoFillCapacity, autoPresetForNewModel, buildProviderProxyControls, buildRowControls, sweepRowSyncButtons, syncPendingControls, syncProviderProxyControls, syncRowControls } from './controls.ts'
 
 /** Translate one dictionary key with optional `{name}` template params. */
 export type Translator = (key: ModelProfileKey, params?: Record<string, unknown>) => string
@@ -48,6 +48,10 @@ export const PROXY_BLOCK_ATTR = 'data-mp-proxy-block'
  */
 export function sweepOnce(controller: ModelCapabilityController, t: Translator): void {
   if (!controller.loaded) return
+  // The provider-row sync button lives on the row HEAD, which is rendered for
+  // every provider regardless of the model catalog's expanded state — seat it
+  // first, so a page whose rows are all collapsed still gets the button.
+  sweepRowSyncButtons(controller, t)
   // The per-row advanced-toggle button is the stable structural marker shared
   // by both official model editors.
   const toggles = document.querySelectorAll('button[aria-expanded]')
@@ -92,8 +96,6 @@ export function sweepOnce(controller: ModelCapabilityController, t: Translator):
     // pending — controls visible immediately, choices staged in memory and
     // written by reconcile once the save commits the model.
     ensureBlock(controller, t, modelEntry, advanced, provider, index, index < 0 ? modelId : '')
-    // Provider-level proxy control lives on the provider card, not the model
-    // row — one block per provider regardless of how many rows it has.
     ensureProviderProxy(controller, t, modelEntry, provider)
   })
 }

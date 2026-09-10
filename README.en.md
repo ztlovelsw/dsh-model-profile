@@ -38,6 +38,15 @@ save/create); cancel writes nothing.
 
 Changes are written **immediately**, no restart needed; the next request is scheduled with the new capabilities.
 
+**One-click "Sync model capabilities"**: every provider row whose models you own gains a
+"Sync model capabilities" button to the left of the official "Edit" button (same size and style). Clicking it
+looks up **every model** of that provider on models.dev by ID: matched models get their image support
+(`input`) and reasoning levels (`reasoningEfforts`) written directly, while the capacity fields (context
+window / max output) are **filled in only when absent** — existing values are never overwritten. Models
+models.dev does not list are left untouched. The button reports progress and outcome in place
+("Syncing…" → "Synced N fields"); hover for the match count, the unlisted model IDs, and any write failures.
+It appears as soon as the row card renders — **no need to expand the model catalog**.
+
 **Configure a proxy per provider**: every configured provider's editor card now has an **Enable proxy** toggle at the bottom (off by default). Checking it pre-fills the default proxy URL `http://127.0.0.1:7890`, which you can replace with your own HTTP/HTTPS proxy address. The proxy is a **provider-level** setting, written to `providers.<route>.proxy` in the `llm-pi-ai` namespace, and applies to every model on that provider. Unchecking clears the field and restores direct connections.
 
 ## What it solves

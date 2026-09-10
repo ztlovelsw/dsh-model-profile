@@ -36,6 +36,16 @@ export const zh = {
   'preset.fetchFailed': '获取 models.dev 数据失败：{error}',
   'pending.hint': '该模型尚未保存：以上选择会先暂存，待模型保存后自动写入。',
   'staged.hint': '预设已暂存：点击本卡的保存后写入。',
+  'sync': '同步模型能力',
+  'sync.hint': '按 models.dev 批量同步当前提供方所有模型的能力：图像支持与思考等级直接写入，上下文窗口/最大输出仅在未填写时补全。',
+  'sync.busy': '同步中…',
+  'sync.applied': '已同步 {n} 项',
+  'sync.none': '该提供方还没有模型，无需同步。',
+  'sync.noMatch': '{n} 个模型均未在 models.dev 收录，未做更改。',
+  'sync.done': '同步完成：{matched}/{total} 个模型命中 models.dev。',
+  'sync.unknown': '未收录：{ids}',
+  'sync.failed': '部分写入失败：{error}',
+  'sync.fetchFailed': '获取 models.dev 数据失败：{error}',
 } satisfies Record<string, string>
 
 /** The model-profile namespace key union. */
@@ -74,4 +84,14 @@ export const en: Record<ModelProfileKey, string> = {
   'preset.fetchFailed': 'Failed to fetch models.dev data: {error}',
   'pending.hint': 'This model is not saved yet: choices are staged and written automatically once it is saved.',
   'staged.hint': 'Preset staged: written when you save this card.',
+  'sync': 'Sync model capabilities',
+  'sync.hint': 'Bulk-sync every model of this provider from models.dev: image support and reasoning levels are written directly; context window and max output are filled in only when absent.',
+  'sync.busy': 'Syncing…',
+  'sync.applied': 'Synced {n} fields',
+  'sync.none': 'This provider has no models to sync.',
+  'sync.noMatch': 'None of the {n} models are listed on models.dev; nothing changed.',
+  'sync.done': 'Sync finished: {matched}/{total} models matched on models.dev.',
+  'sync.unknown': 'Not listed: {ids}',
+  'sync.failed': 'Some writes failed: {error}',
+  'sync.fetchFailed': 'Failed to fetch models.dev data: {error}',
 }
