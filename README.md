@@ -1,22 +1,27 @@
 **中文** · [English](README.en.md)
 
-# dsh-model-profile · 模型能力配置（图像 + 思考等级+上下文+最大输出）
+# dsh-model-profile · 模型能力配置（思考等级 + 上下文容量）
 
 [![dsh-plugin](https://img.shields.io/badge/topic-dsh--plugin-8A2BE2)](https://github.com/topics/dsh-plugin)
 
-在 **「设置 → 模型」** 的模型目录编辑器里，**每个已配置模型的行内**直接加两个官方编辑器没有的控件：
+> **本版本对齐 DSH `0.2.0-rc.2`（同时兼容 `0.2.0-rc.1`）。** 官方模型行自 0.2.0-rc.1 起已自带
+> 「输入类型（文本/图像）」勾选框，因此插件不再注入**图像**控件（见下方「0.2.0-rc.x 变更」）。
+> rc.2 相对 rc.1 只是新增了 remote 命名空间与 pi-ai compat 字段：官方 Models 编辑器
+> （`dsh-client-ui-settings-models`）与 `llm-pi-ai` 的 provider/model schema 二进制一致，
+> 本插件无需改代码，仅把构建/验证基线升到 rc.2。
 
-- **是否支持图像**：继承默认 / 支持图像（`input: ['text','image']`）/ 仅文本（`input: ['text']`）。
+在 **「设置 → 模型」** 的模型目录编辑器里，**每个已配置模型的行内**加一个官方编辑器没有的控件：
+
 - **思考等级**：继承默认 / 不支持思考（`reasoningEfforts: false`）/ 自定义等级
   （`off` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`，逐级勾选并填写接口取值）。
 
 控件块标题行有 **「按 models.dev 预设」** 按钮：按模型 ID 查询
 [models.dev](https://models.dev) 开放数据库（自动去掉网关前缀并容忍 `-high` / `-medium`
-等思考档后缀，一方厂商条目优先），命中后把该模型的图像支持（`modalities.input`）、思考等级
-（`reasoning_options` 枚举，`none` → `off` 且取值为空）**显示在控件里并暂存，不立即写入**
-——容量上限（`limit.context` / `limit.output`）则照旧填进官方行内的「上下文窗口 / 最大输出
-token」输入框（走官方编辑器的草稿）。点本卡的「保存」后，容量随官方草稿一起提交，能力字段
-由插件在保存后随 `settings` 更新落地；不保存就不写入，避免把官方卡片打开时快照的 revision
+等思考档后缀，一方厂商条目优先），命中后把该模型的思考等级
+（`reasoning_options` 枚举，`none` → `off` 且取值为空）**显示在控件里并暂存，不立即写入**；
+图像支持（`modalities.input`）同样暂存，容量上限（`limit.context` / `limit.output`）则照旧填进官方行内的
+「上下文窗口 / 最大输出 token」输入框（走官方编辑器的草稿）。点本卡的「保存」后，容量随官方草稿一起提交，
+能力字段由插件在保存后随 `settings` 更新落地；不保存就不写入，避免把官方卡片打开时快照的 revision
 顶掉、导致保存报「设置已被改动」。models.dev 没有意见的字段保持原值不动。
 
 **新添加的模型自动按 models.dev 预设**：通过「获取可用模型 / 添加模型」新增的行
@@ -42,13 +47,36 @@ models.dev：命中的模型直接写入图像支持（`input`）与思考等级
 按钮就地显示进度与结果（「同步中…」→「已同步 N 项」），鼠标悬停可看命中数、未收录的模型 ID
 与写入失败信息。按钮在行卡片渲染后即出现，**无需展开模型目录**。
 
-**为提供方配置代理**：每个已配置提供方的编辑卡片底部会多出一个「启用代理」开关（默认不勾选）；勾选后自动填入默认代理地址 `http://127.0.0.1:7890`，也可以改成自己的代理地址（HTTP/HTTPS 均可）。代理是**提供方级**设置，写入 `llm-pi-ai` 的 `providers.<route>.proxy` 字段，对该提供方下的所有模型生效。取消勾选即清除该字段、恢复直连。
+## 0.2.0-rc.x 变更
+
+下表是相对 0.1.2-alpha.2 的行为差异；`0.2.0-rc.2` 相对 `0.2.0-rc.1` 没有影响本插件的改动
+（官方 Models 编辑器客户端 bundle 逐字节一致，`llm-pi-ai` 的 config schema 一致；新增的
+`dsh-user-questions` remote 命名空间与 Mistral / mid-convo compat 字段都与本插件无关）。
+
+| 项目 | 0.1.2-alpha.2 及以前 | 0.2.0-rc.1 / rc.2 |
+| --- | --- | --- |
+| 图像支持（`input`） | 插件在行内注入下拉框 | **官方行内自带**「输入类型」勾选框；插件不再注入重复控件，只会在「按 models.dev 预设」与「同步模型能力」时写入该字段 |
+| `input` 的写后处理 | 与其他能力字段一样粘滞复原 | **一次性落地**：写入后即忘，之后以官方勾选框为准，绝不回滚你在官方控件里的选择 |
+| 思考等级（`reasoningEfforts`） | 插件注入 | 官方仍无入口，插件继续注入；**继续粘滞复原**（官方改不到这个字段） |
+| 提供方代理 | 插件写 `providers.<route>.proxy` | **已移除**：该字段在 0.2.0-rc.1 与 rc.2 的 pi-ai provider schema 中都不存在，适配器与 pi-ai 都不读取它；代理改为进程级 `dsh-http-proxy`，读 `http_proxy` / `https_proxy` / `all_proxy` / `no_proxy`（`$DSH_HOME/.env` 或环境变量） |
+| SDK 依赖 | `@deepseek-ai/dsh-*@^0.1.2-alpha.2` | `^0.2.0-rc.1`（覆盖 rc.1、rc.2 与后续 0.2.x）、`@deepseek-ai/cordis@^4.0.4`；构建与测试基线固定 `0.2.0-rc.2`（DSH 会按运行时版本校验 `@deepseek-ai/dsh-*` peer 范围，旧范围会被判为不兼容并拒绝启动） |
+
+代理入口现在写在 `$DSH_HOME/.env`（或直接导出环境变量），例如：
+
+```sh
+HTTPS_PROXY=http://127.0.0.1:7890
+HTTP_PROXY=http://127.0.0.1:7890
+NO_PROXY=localhost,127.0.0.1
+```
+
+改完重启 `dsh web`。设置里遗留的 `providers.<route>.proxy` 字段已成惰性数据，留着无害，
+想清理也可以直接删掉（插件不会再去读写它）。
 
 ## 它解决什么
 
-官方 Models 设置页的模型行只暴露 id / 显示名称 / 上下文窗口 / 最大输出，**没有**图像支持与
-思考等级入口——这两项只能手写 `settings.yaml`。本插件把它们做成行内控件，填的就是模型目录
-编辑器那个位置（自定义模型目录的每一行）。
+官方 Models 设置页的模型行暴露 id / 显示名称 / 上下文窗口 / 最大输出（0.2.0-rc.1 起还有输入类型），
+**没有**思考等级入口——`reasoningEfforts` 只能手写 `settings.yaml`。本插件把它做成行内控件，
+填的就是模型目录编辑器那个位置（自定义模型目录的每一行）。
 
 ## 工作原理
 
@@ -61,10 +89,12 @@ models.dev：命中的模型直接写入图像支持（`input`）与思考等级
     输入框为行特征，顺着编辑卡头部（显示名 / route）反查所属提供方。
   - `controls.ts` 往每个模型行注入一个控件块；React 重绘把它冲掉时，观察器自动重注入并从已提交
     设置重新同步（不会覆盖你正在编辑的元素）。
-  - 写入走最小 `settings.mutate` 路径操作：`providers.<route>.models[<i>].input` / `.reasoningEfforts`，
-    只动这两个字段，模型条目里其它字段（含未知字段）原样保留，并带 `expectedRevision` 防冲突。
-  - **粘滞复原**：官方编辑器保存时会把整个 `models` 数组从它的草稿写回，可能顺带抹掉你刚设的能力
-    字段；控制器记住你本次会话的显式选择，重载后若发现被抹掉会自动补回，避免数据静默丢失。
+  - 写入走最小 `settings.mutate` 路径操作：`providers.<route>.models[<i>].reasoningEfforts`（图像则是
+    `…input`），只动目标字段，模型条目里其它字段（含未知字段）原样保留，并带 `expectedRevision` 防冲突。
+  - **两种生命周期**：`reasoningEfforts` 是**粘滞复原**的——官方编辑器保存时会从草稿整段写回
+    `models` 数组，可能顺带抹掉你刚设的思考等级，控制器记住你本次会话的显式选择并在重载后补回；
+    `input` 则是**一次性落地**——写进去就交给官方勾选框，之后不再干预，避免插件的粘滞逻辑把你在
+    官方控件里的改动改回去。
 
 ## 作用范围与限制
 
@@ -75,17 +105,21 @@ models.dev：命中的模型直接写入图像支持（`input`）与思考等级
 - 能力字段写的是用户层设置，`modelOverrides` 形式暂不处理。
 - 写入按命名空间**串行化**，遇到并发写入导致的 revision 冲突（`settings/conflict`）会自动重新加载
   join 并重试一次，不会把原始冲突抛给用户。「按 models.dev 预设」设置的能力字段会随官方卡片保存
-  落地（不占用官方操作的 revision），不会与卡片保存冲突；**手动**改动控件仍是即时写入，官方编辑器
+  落地（不占用官方操作的 revision），不会与卡片保存冲突；**手动**改动思考等级仍是即时写入，官方编辑器
   卡片在打开时会快照命名空间 revision——手动改完能力后**立即**点卡片自身的「保存」可能提示「设置已
   被改动，请关闭后重新打开」：先保存卡片的其它编辑，或关掉卡片重新打开后再保存即可。
+- 在官方「输入类型」勾选框里改图像支持不会与本插件冲突：插件不会去覆盖它。
 
 ## 安装
 
-> **版本兼容**：本版本对齐 DSH `0.1.2-alpha.2` 的客户端 SDK（`@deepseek-ai/dsh-*`）。
-> 客户端接入改用 `dsh-api-remotes` 挂载的 `remote.settings` / `remote.llm` 命名空间，
-> 不再依赖旧版 `connection.api` / `IApiClient`；`dsh-client-runtime` 已被移除，类型走
-> `@deepseek-ai/cordis` 的 `Context`。若你安装旧版本后 DSH 升级，请重新安装本插件并
-> **重启 `dsh web`**——版本不匹配的 SDK 与宿主并列安装会破坏会话作用域（表现为选择模型时
+> **版本兼容**：本版本在 DSH `0.2.0-rc.2` 上构建与验证，peer 范围 `@deepseek-ai/dsh-*@^0.2.0-rc.1` +
+> `@deepseek-ai/cordis@^4.0.4` 同时覆盖 `0.2.0-rc.1`、`0.2.0-rc.2` 与后续 `0.2.x`。客户端接入走
+> `dsh-api-remotes` 挂载的 `remote.settings` / `remote.llm` 命名空间；`dsh-client-runtime` 已被移除，
+> 类型走 `@deepseek-ai/cordis` 的 `Context`。
+> DSH 会按运行时版本校验插件的 `@deepseek-ai/dsh-*` peer 范围（`dsh plugin list` 会打印不兼容告警，
+> 并在启动时拒绝加载未豁免的插件），所以 `0.1.x` 时代的旧版插件在 0.2.0-rc.x 上**必须重新安装**；装完
+> **重启 `dsh web`**。若你装的是旧版本又升级了 DSH，请重新安装本插件——版本不匹配的 SDK 与宿主并列
+> 安装会破坏会话作用域（表现为选择模型时
 > `agent-presets: refusing to compose an unscoped context`）。
 
 从 npm 安装：
@@ -107,7 +141,7 @@ dsh plugin --profile web add link:D:\Desktop\dsh-model-profile
 ```
 
 然后重启 `dsh web`，打开「设置 → 模型」，展开任一自定义提供方并打开某个模型的高级设置，
-即可在该模型行内看到「图像与思考」控件块。
+即可在该模型行内看到「模型能力」控件块（图像支持用同一区域里官方自带的「输入类型」勾选框）。
 
 ## 卸载
 
@@ -127,10 +161,10 @@ pnpm test           # vitest 纯逻辑单测
 
 - `src/index.ts` — host 半区入口（无行为）。
 - `src/client/index.ts` — browser 半区装配（字典、失效刷新、增强器启动）。
-- `src/client/controller.ts` — providers/models join、写回、粘滞复原。
+- `src/client/controller.ts` — providers/models join、写回、能力字段生命周期。
 - `src/client/enhance.ts` — MutationObserver 结构探测 + 注入协调。
-- `src/client/controls.ts` — 注入块 DOM 构建 / 事件 / 同步。
-- `src/client/core.ts` — 图像 / 思考等级纯逻辑（可单测）。
+- `src/client/controls.ts` — 注入块 DOM 构建 / 事件 / 同步 / 批量同步按钮。
+- `src/client/core.ts` — 思考等级纯逻辑（可单测）。
 - `src/client/locales.ts` — 中英文案。
 - `src/client/enhance.module.css` — 注入块样式（跟随外壳设计令牌）。
 - `cordis.patch.yml` — bundle patch 插件行（id `ui-model-profile`）。

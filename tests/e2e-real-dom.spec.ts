@@ -70,6 +70,137 @@ vi.stubGlobal('fetch', async () => ({
   json: async () => ({ zai: { models: { 'glm-5.5-air': { modalities: { input: ['text', 'image'] }, reasoning_options: [{ type: 'effort', values: ['high'] }] } } } }),
 }) as Response)
 
+/**
+ * The REAL official provider-editor + model-row markup, transcribed from
+ * dsh-client-ui-settings-models 0.2.0-rc.1 (`ProviderEditor` → `ModelListEditor`
+ * → `ModelRow`): the model entry carries the id/display-name row, the capacity
+ * disclosure with its numeric inputs, AND the 0.2.0-rc.1 per-model 输入类型
+ * (text/image) checkpoint fieldset bound to `input`.
+ */
+function realModelEditor(modelId: string): void {
+  const editor = document.createElement('div')
+  editor.className = 'zGbnIq_editor'
+  const header = document.createElement('div')
+  header.className = 'zGbnIq_editorHeader'
+  const title = document.createElement('span')
+  title.className = 'zGbnIq_editorTitle'
+  title.textContent = '9router'
+  const route = document.createElement('span')
+  route.className = 'zGbnIq_editorRoute'
+  route.textContent = 'router9'
+  header.append(title, route)
+
+  const entry = document.createElement('div')
+  entry.className = 'zGbnIq_modelEntry'
+  const row = document.createElement('div')
+  row.className = 'zGbnIq_modelRow'
+  const idInput = document.createElement('input')
+  idInput.className = 'zGbnIq_input'
+  idInput.type = 'text'
+  idInput.value = modelId
+  idInput.setAttribute('aria-label', '模型 ID 1')
+  const nameInput = document.createElement('input')
+  nameInput.className = 'zGbnIq_input'
+  nameInput.type = 'text'
+  nameInput.setAttribute('aria-label', '显示名称 1')
+  const chevron = document.createElement('button')
+  chevron.type = 'button'
+  chevron.className = 'zGbnIq_iconButton'
+  chevron.setAttribute('aria-expanded', 'true')
+  chevron.setAttribute('aria-label', '高级设置 1')
+  const remove = document.createElement('button')
+  remove.type = 'button'
+  remove.className = 'zGbnIq_iconButton zGbnIq_iconButtonDanger'
+  row.append(idInput, nameInput, chevron, remove)
+  entry.appendChild(row)
+
+  const advanced = document.createElement('div')
+  advanced.className = 'zGbnIq_modelAdvanced'
+  for (const label of ['上下文窗口', '最大输出 token']) {
+    const field = document.createElement('label')
+    field.className = 'zGbnIq_modelField'
+    const caption = document.createElement('span')
+    caption.className = 'zGbnIq_modelFieldLabel'
+    caption.textContent = label
+    const input = document.createElement('input')
+    input.className = 'zGbnIq_input'
+    input.type = 'text'
+    input.setAttribute('inputmode', 'numeric')
+    field.append(caption, input)
+    advanced.appendChild(field)
+  }
+  const inputTypes = document.createElement('fieldset')
+  inputTypes.className = 'zGbnIq_modelInputTypes'
+  inputTypes.setAttribute('aria-label', '输入类型 1')
+  const legend = document.createElement('legend')
+  legend.className = 'zGbnIq_modelFieldLabel'
+  legend.textContent = '输入类型'
+  const choices = document.createElement('div')
+  choices.className = 'zGbnIq_modelInputChoices'
+  for (const [modality, checked] of [['文本', true], ['图像', false]] as [string, boolean][]) {
+    const label = document.createElement('label')
+    const box = document.createElement('input')
+    box.type = 'checkbox'
+    box.checked = checked
+    label.append(box, document.createTextNode(modality))
+    choices.appendChild(label)
+  }
+  inputTypes.append(legend, choices)
+  advanced.appendChild(inputTypes)
+  entry.appendChild(advanced)
+
+  const catalog = document.createElement('section')
+  catalog.className = 'zGbnIq_modelCatalog'
+  const listHead = document.createElement('div')
+  listHead.className = 'zGbnIq_modelListHead'
+  const list = document.createElement('div')
+  list.className = 'zGbnIq_modelList'
+  list.appendChild(entry)
+  catalog.append(listHead, list)
+  const body = document.createElement('div')
+  body.className = 'zGbnIq_customizedBody'
+  body.appendChild(catalog)
+  const details = document.createElement('details')
+  details.className = 'zGbnIq_customized'
+  details.appendChild(body)
+  editor.append(header, details)
+  document.body.appendChild(editor)
+}
+
+describe('real official model-row markup (0.2.0-rc.1)', () => {
+  it('injects the reasoning block beside the capacity disclosure and never touches the official input types', async () => {
+    document.body.innerHTML = ''
+    const { settings, llm } = fakeApi()
+    const controller = new ModelCapabilityController(settings, llm)
+    await controller.load()
+    realModelEditor('glm-5.5-air')
+    sweepOnce(controller, t)
+
+    const entry = document.querySelector('.zGbnIq_modelEntry')!
+    const advanced = document.querySelector('.zGbnIq_modelAdvanced')!
+    const block = entry.querySelector(':scope > [data-mp-block]') as HTMLElement
+    expect(block).not.toBeNull()
+    // Sibling of the disclosure, inside the model entry (full row width).
+    expect(block.parentElement).toBe(entry)
+    expect(advanced.parentElement).toBe(entry)
+    expect(block.getAttribute('data-mp-provider')).toBe('router9')
+    expect(block.getAttribute('data-mp-index')).toBe('0')
+
+    // The plugin's block owns the reasoning control only: 0.2.0-rc.1's official
+    // row owns `input`, so no image control is injected anywhere.
+    expect(block.querySelectorAll('select')).toHaveLength(1)
+    expect(document.querySelector('[data-mp-image]')).toBeNull()
+
+    // The official text/image checkboxes survive untouched: same nodes, same
+    // checked state, no plugin attribute in their subtree.
+    const official = document.querySelector('.zGbnIq_modelInputTypes') as HTMLElement
+    expect(advanced.contains(official)).toBe(true)
+    const boxes = [...official.querySelectorAll('input[type="checkbox"]')] as HTMLInputElement[]
+    expect(boxes.map((box) => box.checked)).toEqual([true, false])
+    expect(official.querySelector('[data-mp-block], [data-mp-image]')).toBeNull()
+  })
+})
+
 describe('real official markup end-to-end', () => {
   it('injects beside 编辑 on a collapsed row (no expansion, no editor)', async () => {
     document.body.innerHTML = ''

@@ -1,12 +1,16 @@
 /**
- * DOM enhancer: puts the image-support + reasoning-level controls INSIDE each
- * model entry in the official Models settings editor (the pi-ai provider card's
- * model list), as a sibling of the capacity disclosure so the block spans the
- * full row width (matching the model's id + display-name row above) instead of
- * being constrained to the disclosure's half-width grid. The official editor
+ * DOM enhancer: puts the reasoning-level controls INSIDE each model entry in
+ * the official Models settings editor (the pi-ai provider card's model list),
+ * as a sibling of the capacity disclosure so the block spans the full row
+ * width (matching the model's id + display-name row above) instead of being
+ * constrained to the disclosure's half-width grid. The official editor
  * declares no extension slot, so the enhancer watches the document, detects
  * rows structurally (locale-independent), and appends one capability block to
  * each model entry.
+ *
+ * Image support is not injected: since DSH 0.2.0-rc.1 the official row renders
+ * its own 输入类型 (text/image) checkboxes inside the same disclosure, and the
+ * plugin only *seeds* that field from models.dev.
  *
  * Because the block lives inside the same modelEntry as the capacity
  * disclosure, and the enhancer mirrors the disclosure's open/closed state on
@@ -23,7 +27,7 @@
 
 import type { CapabilityProvider, ModelCapabilityController } from './controller.ts'
 import type { ModelProfileKey } from './locales.ts'
-import { autoFillCapacity, autoPresetForNewModel, buildProviderProxyControls, buildRowControls, sweepRowSyncButtons, syncPendingControls, syncProviderProxyControls, syncRowControls } from './controls.ts'
+import { autoFillCapacity, autoPresetForNewModel, buildRowControls, sweepRowSyncButtons, syncPendingControls, syncRowControls } from './controls.ts'
 
 /** Translate one dictionary key with optional `{name}` template params. */
 export type Translator = (key: ModelProfileKey, params?: Record<string, unknown>) => string
@@ -36,9 +40,6 @@ export interface EnhancerHandle {
 
 /** Marker attribute of one injected capability block. */
 export const BLOCK_ATTR = 'data-mp-block'
-
-/** Marker attribute of one injected provider-level proxy block. */
-export const PROXY_BLOCK_ATTR = 'data-mp-proxy-block'
 
 /**
  * One synchronous detection + injection pass over the whole document.
@@ -96,7 +97,6 @@ export function sweepOnce(controller: ModelCapabilityController, t: Translator):
     // pending — controls visible immediately, choices staged in memory and
     // written by reconcile once the save commits the model.
     ensureBlock(controller, t, modelEntry, advanced, provider, index, index < 0 ? modelId : '')
-    ensureProviderProxy(controller, t, modelEntry, provider)
   })
 }
 
@@ -190,7 +190,6 @@ function resolveDraftProvider(controller: ModelCapabilityController, modelEntry:
     settingsPath: ['providers', route],
     revision: Number.NaN,
     models: [],
-    profile: {},
   }
   controller.byDraftRoute.set(route, info)
   return info
@@ -265,7 +264,6 @@ function resolveAddCardDraft(controller: ModelCapabilityController, modelEntry: 
     settingsPath: [...entry.settingsPath],
     revision: Number.NaN,
     models: [],
-    profile: {},
   }
   controller.byDraftRoute.set(route, info)
   return info
@@ -320,59 +318,6 @@ function ensureBlock(controller: ModelCapabilityController, t: Translator, model
   // The expanded disclosure is where the official capacity inputs live; fill
   // empty ones from models.dev so the editor's save carries the preset too.
   void autoFillCapacity(block, pendingId !== '' ? pendingId : String(provider.models[index]?.['id'] ?? ''))
-}
-
-
-/**
- * The provider editor card owning a model entry — the ancestor whose header
- * (a div whose children are all spans) names a known editable provider route
- * or display name. Same structural walk as {@link resolveProvider}, but returns
- * the card element too so the provider-level proxy block can be appended to it.
- */
-function findProviderCard(controller: ModelCapabilityController, from: HTMLElement): { card: HTMLElement; provider: CapabilityProvider } | undefined {
-  let current: HTMLElement | null = from
-  for (let depth = 0; current !== null && depth < 12; depth++) {
-    const header = current.firstElementChild
-    if (header instanceof HTMLElement && header.children.length > 0 && header.children.length <= 2) {
-      const spans = Array.from(header.children)
-      if (spans.every((child) => child.tagName === 'SPAN')) {
-        for (const span of spans) {
-          const text = (span.textContent ?? '').trim()
-          if (text.length === 0) continue
-          const provider = controller.findProvider(text)
-          if (provider !== undefined) return { card: current, provider }
-        }
-      }
-    }
-    current = current.parentElement
-  }
-  return undefined
-}
-
-/**
- * Ensure the provider editor card carries one provider-level proxy block.
- * Idempotent: a card already carrying one is only re-synced. The block is a
- * sibling of the card's details (after it), so it spans the card width and
- * stays visible regardless of any per-row disclosure state.
- */
-function ensureProviderProxy(controller: ModelCapabilityController, t: Translator, from: HTMLElement, provider: CapabilityProvider): void {
-  const found = findProviderCard(controller, from)
-  if (found === undefined) return
-  const { card } = found
-  let block = card.querySelector(':scope > [' + PROXY_BLOCK_ATTR + ']') as HTMLElement | null
-  if (block !== null) {
-    // Rebind when the card moved to another provider (a route selector switch).
-    if (block.getAttribute('data-mp-provider') !== provider.provider) {
-      block.remove()
-      block = null
-    }
-  }
-  if (block === null) {
-    block = buildProviderProxyControls(controller, t)
-    card.appendChild(block)
-  }
-  block.setAttribute('data-mp-provider', provider.provider)
-  syncProviderProxyControls(controller, block, provider)
 }
 
 /** Start the enhancer: mutation-driven sweeps plus a low-frequency fallback. */

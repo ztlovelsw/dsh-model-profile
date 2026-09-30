@@ -12,20 +12,23 @@ import { transform } from 'lightningcss'
 
 const ID = '@ztlovelsw/dsh-model-profile'
 
-/** Platform modules the dsh web shell shares into the frozen module table. */
+/**
+ * The exact frozen module table the DSH 0.2.0-rc.1 web shell seeds before any
+ * plugin runs (`window.__DSH_PLATFORM_MODULES__`). A client bundle may import
+ * only these plus the inline-safe wire layers below; `@deepseek-ai/dsh-client-runtime`
+ * and the pre-0.2 `dsh-client-web-react` / `dsh-client-schema-form` entries are
+ * gone from the runtime and must not be requested.
+ */
 const PLATFORM_MODULES = [
   'react', 'react/jsx-runtime', 'react-dom', 'react-dom/client', '@deepseek-ai/cordis',
+  '@deepseek-ai/dsh-client-store',
   '@deepseek-ai/dsh-client-ui-slots',
-  '@deepseek-ai/dsh-client-web-react',
   '@deepseek-ai/dsh-client-ui-primitives',
-  '@deepseek-ai/dsh-client-schema-form',
+  '@deepseek-ai/dsh-client-ui-dockkit',
 ]
 
-/** The snapshot-store engine rides the runtime client as a documented exemption. */
-const RUNTIME_STORE_EXEMPTION = '@deepseek-ai/dsh-client-runtime/client'
-
 /** Externals resolved from the loader module table. */
-const CLIENT_EXTERNALS = [...PLATFORM_MODULES, RUNTIME_STORE_EXEMPTION]
+const CLIENT_EXTERNALS = [...PLATFORM_MODULES]
 
 /** Wire/type layers a client bundle may inline (browser-safe contract surfaces). */
 const INLINE_SAFE = /^@deepseek-ai\/dsh-(host-apiproxy|session|llm|tools|brand)(\/|$)/

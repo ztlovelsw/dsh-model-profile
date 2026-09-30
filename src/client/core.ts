@@ -1,10 +1,15 @@
 /**
- * Pure model-capability vocabulary and value rules: the pi-ai thinking
- * levels, and the read/build/validate helpers for the two per-model fields
- * the official Models editor does not expose:
+ * Pure model-capability vocabulary and value rules: the pi-ai thinking levels
+ * and the read/build/validate helpers for the per-model field the official
+ * Models editor still does not expose —
+ * `reasoningEfforts: false | Partial<Record<level, string | null>>`.
  *
- *  - image support   → `input: ['text'] | ['text', 'image']`
- *  - reasoning levels → `reasoningEfforts: false | Partial<Record<level, string | null>>`
+ * Image support (`input`) is deliberately absent here as UI vocabulary: since
+ * DSH 0.2.0-rc.1 the official model row renders its own 输入类型 (text/image)
+ * checkboxes, so the plugin no longer injects a competing control. The plugin
+ * still *writes* `input` in two bulk flows (the models.dev preset and the
+ * provider-level sync), where the value comes straight from models.dev as a
+ * modality array.
  *
  * No runtime dependencies, so the rules are unit-testable without a browser,
  * the settings transport, or the official Models page DOM.
@@ -17,24 +22,8 @@ export type ThinkingLevel = typeof THINKING_LEVELS[number]
 /** UI-facing effort map: level → wire spelling ('' stands for the null wire value, valid only for off). */
 export type UiEfforts = Partial<Record<ThinkingLevel, string>>
 
-/** Image-support tri-state as the injected select shows it. */
-export type ImageMode = 'inherit' | 'on' | 'off'
-
 /** Reasoning tri-state as the injected select shows it. */
 export type ReasoningMode = 'inherit' | 'off' | 'custom'
-
-/** Read the image mode of a stored model entry. */
-export function imageModeOf(entry: Record<string, unknown>): ImageMode {
-  const input = entry['input']
-  if (!Array.isArray(input)) return 'inherit'
-  return input.includes('image') ? 'on' : 'off'
-}
-
-/** The `input` value one image mode writes (undefined clears the field). */
-export function imageValueOf(mode: ImageMode): string[] | undefined {
-  if (mode === 'inherit') return undefined
-  return mode === 'on' ? ['text', 'image'] : ['text']
-}
 
 /** Read the reasoning mode of a stored model entry. */
 export function reasoningModeOf(entry: Record<string, unknown>): ReasoningMode {
@@ -81,30 +70,4 @@ export function buildEffortsPayload(efforts: UiEfforts): Record<string, string |
     payload[level] = wire === '' ? null : wire
   }
   return payload
-}
-
-/**
- * Provider proxy vocabulary: the optional per-provider `proxy` field of a
- * pi-ai provider profile. Omission (or empty) means the route goes direct;
- * a non-empty URL means every model on the route is reached through that
- * proxy. Pure helpers, no runtime dependencies, unit-testable.
- */
-
-/** Proxy URL pre-filled when the user first enables proxy on a provider. */
-export const DEFAULT_PROXY_URL = 'http://127.0.0.1:7890'
-
-/** Whether a stored provider profile has proxy enabled (a non-empty URL). */
-export function proxyEnabled(entry: Record<string, unknown>): boolean {
-  return typeof entry['proxy'] === 'string' && entry['proxy'].trim().length > 0
-}
-
-/** The stored proxy URL of a provider profile ('' when disabled). */
-export function proxyUrlOf(entry: Record<string, unknown>): string {
-  return typeof entry['proxy'] === 'string' ? entry['proxy'] : ''
-}
-
-/** The stored `proxy` value one UI state writes (undefined clears the field). */
-export function buildProxyPayload(url: string): string | undefined {
-  const trimmed = url.trim()
-  return trimmed.length === 0 ? undefined : trimmed
 }

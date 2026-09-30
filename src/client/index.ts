@@ -1,10 +1,15 @@
 /**
- * Model-capability settings — browser half. Injects image-support and
- * reasoning-level controls into every model row of the official Models
- * settings editor (the place the official page does not expose), bound to the
- * same provider/settings join the Models page uses. Writes land as minimal
- * `settings.mutate` path ops against `providers.<route>.models[<i>]` in the
- * `llm-pi-ai` namespace, preserving every hidden field the editor keeps.
+ * Model-capability settings — browser half. Injects reasoning-level controls
+ * into every model row of the official Models settings editor (the place the
+ * official page does not expose), bound to the same provider/settings join the
+ * Models page uses, and seeds image support / capacity from models.dev. Writes
+ * land as minimal `settings.mutate` path ops against
+ * `providers.<route>.models[<i>]` in the `llm-pi-ai` namespace, preserving
+ * every hidden field the editor keeps.
+ *
+ * Image support itself is not injected: DSH 0.2.0-rc.1's official model row
+ * renders its own 输入类型 (text/image) checkboxes, so the plugin only writes
+ * `input` when the user asks for a models.dev preset or a bulk sync.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
@@ -21,15 +26,10 @@ export type { CapabilityProvider, DirectoryEntry, ModelCapabilityController } fr
 export type { EnhancerHandle, Translator } from './enhance.ts'
 export type { ModelProfileKey } from './locales.ts'
 export {
-  DEFAULT_PROXY_URL,
   THINKING_LEVELS,
   type ThinkingLevel,
   type UiEfforts,
-  type ImageMode,
   type ReasoningMode,
-  buildProxyPayload,
-  proxyEnabled,
-  proxyUrlOf,
 } from './core.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {

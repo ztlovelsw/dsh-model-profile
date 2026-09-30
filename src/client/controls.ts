@@ -1,9 +1,15 @@
 /**
- * The injected capability block: one image-support select, one reasoning-mode
- * select, and — in custom mode — the seven thinking-level checkboxes with
- * their wire-spelling inputs. Plain DOM (the official page is React-owned; the
- * enhancer re-injects this block whenever React wipes it), syncing from the
- * committed settings on every sweep and writing through the controller.
+ * The injected capability block: one reasoning-mode select and — in custom
+ * mode — the seven thinking-level checkboxes with their wire-spelling inputs.
+ * Plain DOM (the official page is React-owned; the enhancer re-injects this
+ * block whenever React wipes it), syncing from the committed settings on every
+ * sweep and writing through the controller.
+ *
+ * Image support is deliberately NOT here: since DSH 0.2.0-rc.1 the official
+ * model row renders its own 输入类型 (text/image) checkboxes bound to the same
+ * `input` field, so a second control would duplicate — and fight — it. The
+ * plugin still seeds `input` from models.dev in two bulk flows (the preset
+ * button and the provider-level sync).
  */
 
 import type { ModelCapabilityController, CapabilityProvider } from './controller.ts'
@@ -11,17 +17,10 @@ import { messageOf } from './controller.ts'
 import type { Translator } from './enhance.ts'
 import type { ModelProfileKey } from './locales.ts'
 import {
-  DEFAULT_PROXY_URL,
   THINKING_LEVELS,
-  type ThinkingLevel,
   type UiEfforts,
   buildEffortsPayload,
-  buildProxyPayload,
   effortsValid,
-  imageModeOf,
-  imageValueOf,
-  proxyEnabled,
-  proxyUrlOf,
   reasoningModeOf,
   storedEfforts,
 } from './core.ts'
@@ -57,27 +56,6 @@ export function buildRowControls(controller: ModelCapabilityController, t: Trans
 
   const row = document.createElement('div')
   row.className = css.row
-
-  // ---- image support ----
-  const imageField = document.createElement('div')
-  imageField.className = css.field
-  const imageLabel = document.createElement('span')
-  imageLabel.className = css.label
-  imageLabel.textContent = t('image')
-  const imageSel = document.createElement('select')
-  imageSel.className = css.select
-  imageSel.setAttribute('data-mp-image', '')
-  imageSel.title = t('image.hint')
-  appendOptions(imageSel, [
-    ['', t('image.inherit')],
-    ['image', t('image.on')],
-    ['text', t('image.off')],
-  ])
-  imageSel.addEventListener('change', () => {
-    const mode = imageSel.value === '' ? 'inherit' : imageSel.value === 'image' ? 'on' : 'off'
-    void performWrite(block, controller, t, 'input', imageValueOf(mode))
-  })
-  imageField.append(imageLabel, imageSel)
 
   // ---- reasoning mode ----
   const reasonField = document.createElement('div')
@@ -177,7 +155,7 @@ export function buildRowControls(controller: ModelCapabilityController, t: Trans
     void applyPreset(block, controller, t, presetBtn)
   })
 
-  row.append(imageField, reasonField)
+  row.append(reasonField)
   block.append(titleRow, pendingNote, row, grid, error)
   return block
 }
@@ -192,6 +170,10 @@ export function buildRowControls(controller: ModelCapabilityController, t: Trans
  * reconcile writes the staged fields. An immediate write here would bump the
  * namespace revision behind the open card's snapshot and make the very next
  * save report "settings changed while this card was open".
+ *
+ * The staged image value is a one-shot seed: reconcile writes it once and then
+ * forgets it, because the official text/image checkboxes own `input` from then
+ * on.
  */
 async function applyPreset(block: HTMLElement, controller: ModelCapabilityController, t: Translator, button: HTMLButtonElement): Promise<void> {
   const provider = currentProvider(controller, block)
@@ -217,8 +199,8 @@ async function applyPreset(block: HTMLElement, controller: ModelCapabilityContro
       return
     }
     // Stage the capability fields for both committed and pre-save rows: the
-    // checkboxes show the preset immediately, and reconcile writes them after
-    // the official editor's save (a `settings` reload).
+    // reasoning controls show the preset immediately, and reconcile writes both
+    // fields after the official editor's save (a `settings` reload).
     if (preset.input !== undefined) controller.recordPending(provider, modelId, 'input', preset.input)
     if (preset.reasoningEfforts !== undefined) controller.recordPending(provider, modelId, 'reasoningEfforts', preset.reasoningEfforts)
     // Capacity fields are the official editor's own inputs: fill them so the
@@ -356,13 +338,8 @@ export function syncPendingControls(controller: ModelCapabilityController, block
   syncBlockFromModel(block, controller.pendingModel(provider, modelId))
 }
 
-/** Sync the selects (and custom grid) from one capability model view. */
+/** Sync the reasoning select (and custom grid) from one capability model view. */
 function syncBlockFromModel(block: HTMLElement, model: Record<string, unknown>): void {
-  const imageSel = block.querySelector('[data-mp-image]')
-  if (imageSel instanceof HTMLSelectElement && document.activeElement !== imageSel) {
-    const mode = imageModeOf(model)
-    imageSel.value = mode === 'inherit' ? '' : mode === 'on' ? 'image' : 'text'
-  }
   const reasonSel = block.querySelector('[data-mp-reason]')
   if (reasonSel instanceof HTMLSelectElement && document.activeElement !== reasonSel) {
     const mode = reasoningModeOf(model)
@@ -463,107 +440,6 @@ function appendOptions(select: HTMLSelectElement, options: [string, string][]): 
 }
 
 /**
- * Build one provider-level proxy block: a checkbox ("enable proxy") and a URL
- * input that appears once the checkbox is checked. Unlike the per-model
- * capability block, this is appended to the PROVIDER editor card (not a model
- * row) and writes the provider-scoped `providers.<route>.proxy` field. The
- * provider travels via `data-mp-provider`; there is no per-row index.
- */
-export function buildProviderProxyControls(controller: ModelCapabilityController, t: Translator): HTMLElement {
-  const block = document.createElement('div')
-  block.className = css.proxyBlock
-  block.setAttribute('data-mp-proxy-block', '')
-
-  const row = document.createElement('div')
-  row.className = css.proxyRow
-
-  const check = document.createElement('label')
-  check.className = css.proxyCheck
-  const box = document.createElement('input')
-  box.type = 'checkbox'
-  box.setAttribute('data-mp-proxy-enabled', '')
-  const name = document.createElement('span')
-  name.textContent = t('proxy.enable')
-  check.append(box, name)
-
-  const url = document.createElement('input')
-  url.type = 'text'
-  url.className = css.proxyUrl
-  url.setAttribute('data-mp-proxy-url', '')
-  url.placeholder = t('proxy.urlPlaceholder')
-  url.title = t('proxy.hint')
-  url.disabled = true
-  url.hidden = true
-
-  const error = document.createElement('p')
-  error.className = css.error
-  error.setAttribute('data-mp-proxy-error', '')
-  error.hidden = true
-
-  // Enabling proxy pre-fills the default URL once (unless a custom URL is
-  // already typed); disabling clears the stored field and hides the input.
-  box.addEventListener('change', () => {
-    const provider = currentProvider(controller, block)
-    if (provider === undefined) return
-    if (box.checked) {
-      if (url.value.trim().length === 0) url.value = DEFAULT_PROXY_URL
-      url.disabled = false
-      url.hidden = false
-      void performProxyWrite(block, controller, t, url)
-    } else {
-      url.disabled = true
-      url.hidden = true
-      void performProxyWrite(block, controller, t, url)
-    }
-  })
-  url.addEventListener('change', () => {
-    void performProxyWrite(block, controller, t, url)
-  })
-
-  row.append(check, url)
-  block.append(row, error)
-  return block
-}
-
-/** Sync one provider proxy block from the committed/staged provider profile. */
-export function syncProviderProxyControls(controller: ModelCapabilityController, block: HTMLElement, provider: CapabilityProvider): void {
-  const box = block.querySelector('[data-mp-proxy-enabled]')
-  const url = block.querySelector('[data-mp-proxy-url]')
-  if (!(box instanceof HTMLInputElement) || !(url instanceof HTMLInputElement)) return
-  // The controller resolves the effective state: a staged (pending) intent
-  // wins over the committed profile until reconcile lands it, and it owns
-  // the "user chose to clear" sentinel.
-  const proxy = controller.effectiveProviderProxy(provider)
-  if (document.activeElement !== box) box.checked = proxy.enabled
-  if (document.activeElement !== url) url.value = proxy.enabled ? proxy.url : ''
-  url.disabled = !proxy.enabled
-  url.hidden = !proxy.enabled
-}
-
-/**
- * Write the provider proxy state through the controller, surfacing failures
- * inside the block.
- */
-async function performProxyWrite(block: HTMLElement, controller: ModelCapabilityController, t: Translator, url: HTMLInputElement): Promise<void> {
-  const provider = currentProvider(controller, block)
-  const error = block.querySelector('[data-mp-proxy-error]')
-  if (provider === undefined) return
-  const box = block.querySelector('[data-mp-proxy-enabled]')
-  const enabled = box instanceof HTMLInputElement && box.checked
-  const value = enabled ? buildProxyPayload(url.value) : undefined
-  const failure = await controller.writeProviderField(provider, 'proxy', value)
-  if (error instanceof HTMLElement) {
-    if (failure === undefined) {
-      error.hidden = true
-    } else {
-      error.textContent = t('write.failed', { error: failure })
-      error.hidden = false
-    }
-  }
-}
-
-
-/**
  * 同步模型能力（sync capabilities from models.dev）— the provider-level flow.
  *
  * The official Models page renders one provider row card per route, whose head
@@ -575,11 +451,13 @@ async function performProxyWrite(block: HTMLElement, controller: ModelCapability
  * renders, exactly beside 编辑.
  *
  * Click behaviour: every model of the provider is looked up on models.dev by
- * id; the two capability fields this plugin owns (image support and reasoning
- * efforts) are written straight through the controller (revision-fenced,
- * whole-array set), and the capacity fields (context window / max output) are
- * gap-filled only when the entry does not declare them. Fields models.dev has
- * no opinion on, and models it does not list, are left untouched.
+ * id; the two capability fields this plugin can seed (image support and
+ * reasoning efforts) are written straight through the controller
+ * (revision-fenced, whole-array set), and the capacity fields (context window /
+ * max output) are gap-filled only when the entry does not declare them. Fields
+ * models.dev has no opinion on, and models it does not list, are left
+ * untouched. The image write is a plain seed: it is not remembered for the
+ * session, so the official text/image checkboxes stay authoritative afterwards.
  */
 /** One button's in-flight state, keyed by the action group it lives in. */
 const syncBusy = new WeakMap<HTMLElement, boolean>()

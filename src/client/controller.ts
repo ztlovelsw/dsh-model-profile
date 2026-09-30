@@ -1,12 +1,21 @@
 /**
  * The model-capability controller: joins the configurable-provider directory
  * (`remote.llm.listConfigurableProviders`) with the settings namespaces
- * (`remote.settings.describe`) and writes the two per-model capability fields
- * the official Models editor does not expose — `input` (image support) and
- * `reasoningEfforts` (thinking levels) — as one whole-array
- * `remote.settings.mutate` `set` on the user-layer `providers.<route>.models`
- * list (the settings path walker cannot address array elements), preserving
- * every hidden field.
+ * (`remote.settings.describe`) and writes the per-model capability fields
+ * through one whole-array `remote.settings.mutate` `set` on the user-layer
+ * `providers.<route>.models` list (the settings path walker cannot address
+ * array elements), preserving every hidden field.
+ *
+ * Two fields are written, with deliberately different lifetimes:
+ *
+ *  - `reasoningEfforts` (thinking levels) — no official surface. The controller
+ *    remembers an explicit choice for the session and re-applies it whenever a
+ *    concurrent whole-array save drops it.
+ *  - `input` (image support) — since DSH 0.2.0-rc.1 the official model row
+ *    renders its own text/image checkboxes for exactly this field. The plugin
+ *    only ever *seeds* it (models.dev preset / provider sync) and never defends
+ *    the value afterwards, so an image choice made in the official control is
+ *    never silently reverted.
  *
  * Only pi-ai provider routes whose model list the USER owns are surfaced:
  * the pi-ai schema alone declares the two fields, and a catalog-inherited
@@ -56,13 +65,6 @@ export interface CapabilityProvider {
   revision: number
   /** The user-layer model entries, in stored order. */
   models: Record<string, unknown>[]
-  /**
-   * The user-layer provider profile object (the `providers.<route>` entry this
-   * provider owns). Carries the provider-scoped fields the Models editor does
-   * not expose — today just the optional `proxy` — and keeps the hidden ones
-   * (apiKeyEnv, baseURL, …) untouched by our writes.
-   */
-  profile: Record<string, unknown>
 }
 
 /**
@@ -102,6 +104,19 @@ function getPath(value: unknown, path: readonly string[]): unknown {
     current = (current as Record<string, unknown>)[key]
   }
   return current
+}
+
+/** One remembered capability choice: a sticky `reasoningEfforts`, a one-shot `input`. */
+interface CapabilityIntent {
+  /**
+   * A staged image-support value. Written once, then forgotten: the official
+   * editor owns `input` from then on.
+   */
+  input?: unknown
+  /** The user's thinking-level choice, defended across concurrent saves. */
+  reasoningEfforts?: unknown
+  /** True while the choice belongs to a row the official editor has not committed. */
+  pending?: boolean
 }
 
 /**
@@ -155,22 +170,16 @@ export class ModelCapabilityController {
    * Capability values the user explicitly chose this session, keyed by
    * `route\u0000modelId`. The official editor saves the whole `models` array
    * from a draft that predates these writes, so it can silently drop them;
-   * after every reload {@link reconcile} re-applies any intended value that
-   * drifted. `ABSENT` means the user chose to clear the field. A `pending`
-   * choice belongs to a model the official editor staged (fetch-catalog add)
-   * but has not committed yet — it is kept until the save lands the model.
+   * after every reload {@link reconcile} re-applies what drifted.
+   *
+   * `reasoningEfforts` is defended for the session: nothing else can edit it.
+   * `input` is not — it is seeded once and dropped (see {@link CapabilityIntent}),
+   * because the official editor now owns that field and a later official edit
+   * must win. A `pending` choice belongs to a model the official editor staged
+   * (fetch-catalog add) but has not committed yet — it is kept until the save
+   * lands the model.
    */
-  private readonly intended = new Map<string, { input?: unknown; reasoningEfforts?: unknown; pending?: boolean }>()
-  /**
-   * Provider-scoped choices the user explicitly made this session, keyed by
-   * route. Today only `proxy`. Like {@link intended} it survives official
-   * whole-section saves (the Models editor rebuilds the profile from a draft
-   * that predates our writes), and {@link reconcile} re-applies any drifted
-   * value. `pending` marks a choice staged for a provider whose profile is
-   * not committed yet (add-provider / add-custom flows); it lands once the
-   * official save commits the route and a `settings` reload follows.
-   */
-  private readonly providerIntents = new Map<string, { proxy?: unknown; pending?: boolean }>()
+  private readonly intended = new Map<string, CapabilityIntent>()
   /** Re-entrancy guard for {@link reconcile}. */
   private reconciling = false
   /**
@@ -228,12 +237,6 @@ export class ModelCapabilityController {
         const models = userModels.map((raw) => {
           return typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? raw as Record<string, unknown> : {}
         })
-        // The whole provider profile (the `providers.<route>` entry) the
-        // provider-scoped fields — today just `proxy` — live on.
-        const profileRaw = getPath(namespace.user, entry.settingsPath)
-        const profile = typeof profileRaw === 'object' && profileRaw !== null && !Array.isArray(profileRaw)
-          ? profileRaw as Record<string, unknown>
-          : {}
         const info: CapabilityProvider = {
           provider: entry.provider,
           displayName: entry.displayName,
@@ -241,7 +244,6 @@ export class ModelCapabilityController {
           settingsPath: [...entry.settingsPath],
           revision: namespace.revision,
           models,
-          profile,
         }
         byRoute.set(entry.provider, info)
         byDisplayName.set(entry.displayName, info)
@@ -265,7 +267,7 @@ export class ModelCapabilityController {
    * a no-op when nothing drifted.
    */
   private async reconcile(): Promise<void> {
-    if (this.reconciling || (this.intended.size === 0 && this.providerIntents.size === 0)) return
+    if (this.reconciling || this.intended.size === 0) return
     this.reconciling = true
     try {
       for (const [key, intent] of Array.from(this.intended.entries())) {
@@ -296,23 +298,11 @@ export class ModelCapabilityController {
         const model = provider.models[index]
         await this.enforce(provider, index, model, 'input', intent.input)
         await this.enforce(provider, index, model, 'reasoningEfforts', intent.reasoningEfforts)
+        // The seeded image value has landed (or already matched): forget it, so
+        // a later image choice made in the official control is never reverted.
+        delete intent.input
         intent.pending = false
-      }
-      for (const [route, intent] of Array.from(this.providerIntents.entries())) {
-        const provider = this.byRoute.get(route)
-        if (provider === undefined) {
-          // A pending choice may belong to a draft provider (add-custom /
-          // add-provider flows) whose route is not committed yet — keep
-          // waiting for the save. A committed choice whose provider vanished
-          // was removed by the user.
-          if (!intent.pending) this.providerIntents.delete(route)
-          continue
-        }
-        // Staged (pending) choices land only after a settings write, the same
-        // gate the model-level intents use (see above).
-        if (intent.pending && !this.sawSettings) continue
-        await this.enforceProvider(provider, 'proxy', intent.proxy)
-        intent.pending = false
+        if (intent.reasoningEfforts === undefined) this.intended.delete(key)
       }
     } finally {
       this.reconciling = false
@@ -328,17 +318,6 @@ export class ModelCapabilityController {
       : JSON.stringify(current) !== JSON.stringify(want)
     if (!drifted) return
     await this.writeField(provider, index, field, want === ABSENT ? undefined : want)
-  }
-
-  /** Write one intended provider-scoped field back when the committed value drifted. */
-  private async enforceProvider(provider: CapabilityProvider, field: 'proxy', want: unknown): Promise<void> {
-    if (want === undefined) return
-    const current = provider.profile[field]
-    const drifted = want === ABSENT
-      ? current !== undefined
-      : JSON.stringify(current) !== JSON.stringify(want)
-    if (!drifted) return
-    await this.writeProviderField(provider, field, want === ABSENT ? undefined : want)
   }
 
   /** Resolve a card header's route or display-name text to an editable provider. */
@@ -421,71 +400,33 @@ export class ModelCapabilityController {
   }
 
   /**
-   * Write one provider-scoped field (today just `proxy`) at
-   * `providers.<route>.<field>`, fenced by the latest known revision. Unlike
-   * {@link writeField} the path walker CAN address a provider field — it is a
-   * plain object property, not an array element — so the write is a minimal
-   * `set` op. `undefined` unsets the field. Returns the failure message, or
-   * undefined once the write landed.
-   *
-   * A provider whose profile is not committed yet (draft route with a NaN
-   * revision, e.g. the add-provider card) cannot be written directly: the
-   * choice is staged through {@link recordProviderIntent} and lands via
-   * {@link reconcile} once the official save commits the route.
+   * Remember an explicit user choice so {@link reconcile} can defend it.
+   * Only `reasoningEfforts` is defensible: the official editor renders no
+   * control for it, so re-applying the user's choice can never fight a
+   * deliberate official edit. `input` is owned by the official control, so a
+   * write of it here is dropped from the record instead (and any staged seed
+   * for it is retired).
    */
-  async writeProviderField(info: CapabilityProvider, field: 'proxy', value: unknown): Promise<string | undefined> {
-    if (Number.isNaN(info.revision)) {
-      // Draft route: no profile to write to yet. Stage the choice (pending)
-      // so reconcile lands it once the official save commits the route.
-      this.recordProviderIntent(info.provider, field, value, true)
-      return undefined
-    }
-    const run = this.writeChain.then(async () => {
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const fresh = this.byRoute.get(info.provider) ?? info
-        if (Number.isNaN(fresh.revision)) return 'provider not saved yet'
-        const op = value === undefined
-          ? { op: 'unset' as const, path: [...fresh.settingsPath, field] }
-          : { op: 'set' as const, path: [...fresh.settingsPath, field], value }
-        let response: Awaited<ReturnType<SettingsRemote['mutate']>>
-        try {
-          response = await this.settings.mutate(
-            fresh.settingsNs,
-            [op],
-            fresh.revision,
-          )
-        } catch (error) {
-          return messageOf(error)
-        }
-        if (response.ok) {
-          fresh.revision = response.value.revision
-          if (value === undefined) delete fresh.profile[field]
-          else fresh.profile[field] = value
-          this.recordProviderIntent(fresh.provider, field, value)
-          return undefined
-        }
-        if (attempt === 0 && response.error.code === 'settings/conflict') {
-          await this.load('settings')
-          continue
-        }
-        return response.error.message
-      }
-      return 'settings write still conflicting after refresh'
-    })
-    this.writeChain = run.catch(() => undefined)
-    return run
-  }
-
-  /** Remember an explicit user choice so {@link reconcile} can defend it. */
   private recordIntent(info: CapabilityProvider, index: number, field: string, value: unknown): void {
     const model = info.models[index]
     if (model === undefined) return
     const modelId = String(model['id'] ?? '')
     if (modelId.length === 0) return
-    if (field !== 'input' && field !== 'reasoningEfforts') return
     const key = info.provider + '\u0000' + modelId
+    if (field === 'input') {
+      // The official control owns `input`: retire any seed for it. A staged
+      // `reasoningEfforts` beside it keeps its own `pending` gate — this write
+      // says nothing about whether that choice is still waiting for a save.
+      const existing = this.intended.get(key)
+      if (existing !== undefined) {
+        delete existing.input
+        if (existing.reasoningEfforts === undefined) this.intended.delete(key)
+      }
+      return
+    }
+    if (field !== 'reasoningEfforts') return
     const intent = this.intended.get(key) ?? {}
-    intent[field] = value === undefined ? ABSENT : value
+    intent.reasoningEfforts = value === undefined ? ABSENT : value
     this.intended.set(key, intent)
   }
 
@@ -531,57 +472,11 @@ export class ModelCapabilityController {
       if (!key.startsWith(prefix)) continue
       if (this.intended.get(key)?.pending) this.intended.delete(key)
     }
-    // Provider-scoped draft choices (proxy) ride the same disowning.
-    this.evictProviderPending(route)
   }
 
   /** Read one staged or committed choice back — for tests and diagnostics. */
   readIntent(route: string, modelId: string): { input?: unknown; reasoningEfforts?: unknown; pending?: boolean } | undefined {
     return this.intended.get(route + '\u0000' + modelId)
-  }
-
-  /**
-   * Remember an explicit provider-scoped choice (today just `proxy`) so
-   * {@link reconcile} can defend it against a concurrent whole-section save.
-   * `pending` is set by {@link writeProviderField} when the route is a draft;
-   * callers staging a choice before a draft route exists pass it explicitly.
-   */
-  recordProviderIntent(route: string, field: 'proxy', value: unknown, pending = false): void {
-    const intent = this.providerIntents.get(route) ?? {}
-    intent[field] = value === undefined ? ABSENT : value
-    if (pending) intent.pending = true
-    this.providerIntents.set(route, intent)
-  }
-
-  /** Read one staged or committed provider-scoped choice back — for tests. */
-  readProviderIntent(route: string): { proxy?: unknown; pending?: boolean } | undefined {
-    return this.providerIntents.get(route)
-  }
-
-  /**
-   * Resolve the proxy state a provider proxy block should show: a staged
-   * (pending) intent wins over the committed profile until reconcile lands
-   * it, and the 'user chose to clear' sentinel resolves to disabled.
-   */
-  effectiveProviderProxy(provider: CapabilityProvider): { enabled: boolean; url: string } {
-    const intent = this.providerIntents.get(provider.provider)
-    if (intent?.pending === true) {
-      if (intent.proxy === undefined || intent.proxy === ABSENT) return { enabled: false, url: '' }
-      return { enabled: true, url: String(intent.proxy) }
-    }
-    const stored = provider.profile['proxy']
-    const enabled = typeof stored === 'string' && stored.trim().length > 0
-    return { enabled, url: enabled ? stored as string : '' }
-  }
-
-  /**
-   * Drop the pending provider-scoped choices of one draft route — the user
-   * switched or cleared the route selector, disowning everything staged under
-   * the old id (nothing must resurrect when some future provider takes it).
-   */
-  evictProviderPending(route: string): void {
-    const intent = this.providerIntents.get(route)
-    if (intent?.pending) this.providerIntents.delete(route)
   }
 }
 

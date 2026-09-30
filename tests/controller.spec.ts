@@ -68,11 +68,6 @@ function makeContext(opts: {
       if (op?.op === 'set' && (op.path as string[])[(op.path as string[]).length - 1] === 'models') {
         userModels = (op.value as Array<Record<string, unknown>>).map((model) => ({ ...model }))
         userProviderProfile = { ...userProviderProfile, models: userModels }
-      } else if (op?.op === 'set' && (op.path as string[])[(op.path as string[]).length - 1] === 'proxy') {
-        userProviderProfile = { ...userProviderProfile, proxy: op.value as string }
-      } else if (op?.op === 'unset' && (op.path as string[])[(op.path as string[]).length - 1] === 'proxy') {
-        const { proxy: _removed, ...kept } = userProviderProfile
-        userProviderProfile = kept
       }
       revision = (expected ?? 0) + 1
       return { ok: true as const, value: { revision } }
@@ -270,72 +265,88 @@ describe('directoryByRoute (add-provider draft resolution)', () => {
   })
 })
 
-describe('writeProviderField (provider proxy)', () => {
-  it('writes the proxy field as a minimal path op and advances the cached revision', async () => {
-    const { controller, mutateLog } = makeContext({ models: [{ id: 'm1' }] })
+describe('capability lifetimes (0.2.0-rc.1: the official row owns `input`)', () => {
+  it('forgets a seeded input once it landed, so an official edit is never reverted', async () => {
+    const { controller, mutateLog, settings } = makeContext({ models: [{ id: 'm1' }] })
     await controller.load()
-    const provider = controller.byRoute.get('p1')
-    expect(provider).toBeDefined()
-    const failure = await controller.writeProviderField(provider!, 'proxy', 'http://127.0.0.1:7890')
-    expect(failure).toBeUndefined()
-    expect(mutateLog).toHaveLength(1)
-    expect(mutateLog[0]).toMatchObject({
-      expectedRevision: 1,
-      ops: [{ op: 'set', path: ['providers', 'p1', 'proxy'], value: 'http://127.0.0.1:7890' }],
-    })
-    expect(controller.byRoute.get('p1')?.revision).toBe(2)
-    expect(controller.byRoute.get('p1')?.profile.proxy).toBe('http://127.0.0.1:7890')
-  })
-
-  it('unsets the proxy field when disabled', async () => {
-    const { controller, mutateLog } = makeContext({ models: [{ id: 'm1' }] })
-    await controller.load()
-    const provider = controller.byRoute.get('p1')
-    await controller.writeProviderField(provider!, 'proxy', 'http://127.0.0.1:7890')
-    const failure = await controller.writeProviderField(provider!, 'proxy', undefined)
-    expect(failure).toBeUndefined()
-    const ops = mutateLog.map((entry) => entry.ops[0])
-    expect(ops[1]).toMatchObject({ op: 'unset', path: ['providers', 'p1', 'proxy'] })
-    expect(controller.byRoute.get('p1')?.profile.proxy).toBeUndefined()
-  })
-
-  it('stages the choice for a draft provider (NaN revision) instead of writing', async () => {
-    const { controller, mutateLog } = makeContext({ models: [{ id: 'm1' }] })
-    await controller.load()
-    const draft = {
-      provider: 'new-route',
-      displayName: 'new-route',
-      settingsNs: 'llm-pi-ai' as const,
-      settingsPath: ['providers', 'new-route'],
-      revision: Number.NaN,
-      models: [],
-      profile: {},
-    }
-    const failure = await controller.writeProviderField(draft, 'proxy', 'http://127.0.0.1:7890')
-    expect(failure).toBeUndefined()
-    expect(mutateLog).toHaveLength(0)
-    expect(controller.readProviderIntent('new-route')).toMatchObject({ proxy: 'http://127.0.0.1:7890', pending: true })
-  })
-
-  it('reconcile lands a staged provider proxy after a settings reload', async () => {
-    const { controller, mutateLog } = makeContext({ models: [{ id: 'm1' }] })
-    await controller.load()
-    const draft = {
-      provider: 'new-route',
-      displayName: 'new-route',
-      settingsNs: 'llm-pi-ai' as const,
-      settingsPath: ['providers', 'new-route'],
-      revision: Number.NaN,
-      models: [],
-      profile: {},
-    }
-    await controller.writeProviderField(draft, 'proxy', 'http://127.0.0.1:7890')
-    expect(mutateLog).toHaveLength(0)
-    // The official save commits the route; a settings reload follows.
-    // Re-load with the route now present in providers.
+    const provider = controller.byRoute.get('p1')!
+    controller.recordPending(provider, 'm1', 'input', ['text', 'image'])
+    controller.recordPending(provider, 'm1', 'reasoningEfforts', { high: 'high' })
     await controller.load('settings')
-    // The route is still not in byRoute (the mock providers list only has p1),
-    // so the staged choice stays pending until the route actually appears.
-    expect(controller.readProviderIntent('new-route')).toMatchObject({ pending: true })
+    await vi.waitFor(() => expect(mutateLog).toHaveLength(2))
+    // The seed landed and was retired; the thinking choice stays remembered.
+    expect(controller.readIntent('p1', 'm1')?.input).toBeUndefined()
+    expect(controller.readIntent('p1', 'm1')).toMatchObject({ reasoningEfforts: { high: 'high' }, pending: false })
+
+    // The user unchecks 图像 in the OFFICIAL text/image control and saves: the
+    // whole-array write lands text-only in settings. (This call is the official
+    // editor's own write, so it counts in the log too.)
+    await settings.mutate('llm-pi-ai', [{
+      op: 'set',
+      path: ['providers', 'p1', 'models'],
+      value: [{ id: 'm1', input: ['text'], reasoningEfforts: { high: 'high' } }],
+    }], 9)
+    const afterOfficialSave = mutateLog.length
+    await controller.load('settings')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    // Nothing was written back: the official choice wins, and the matching
+    // reasoning value needed no repair either.
+    expect(mutateLog).toHaveLength(afterOfficialSave)
+    expect(controller.byRoute.get('p1')?.models[0]).toMatchObject({ input: ['text'] })
+  })
+
+  it('re-applies a reasoning choice the official whole-array save dropped', async () => {
+    const { controller, mutateLog, settings } = makeContext({ models: [{ id: 'm1', reasoningEfforts: { high: 'high' } }] })
+    await controller.load()
+    await controller.writeField(controller.byRoute.get('p1')!, 0, 'reasoningEfforts', { low: 'low', high: 'high' })
+    expect(mutateLog).toHaveLength(1)
+
+    // The official card saves from a draft that predates the write, dropping it.
+    await settings.mutate('llm-pi-ai', [{
+      op: 'set',
+      path: ['providers', 'p1', 'models'],
+      value: [{ id: 'm1', input: ['text'] }],
+    }], 9)
+    const afterOfficialSave = mutateLog.length
+    await controller.load('settings')
+    await vi.waitFor(() => {
+      expect(controller.byRoute.get('p1')?.models[0]).toMatchObject({ reasoningEfforts: { low: 'low', high: 'high' } })
+    })
+    // Exactly one repair write on top of the official save.
+    expect(mutateLog).toHaveLength(afterOfficialSave + 1)
+  })
+
+  it('does not remember a direct input write (official control owns the field)', async () => {
+    const { controller } = makeContext({ models: [{ id: 'm1' }] })
+    await controller.load()
+    const failure = await controller.writeField(controller.byRoute.get('p1')!, 0, 'input', ['text', 'image'])
+    expect(failure).toBeUndefined()
+    expect(controller.readIntent('p1', 'm1')).toBeUndefined()
+  })
+
+  it('drops a staged input seed when a direct input write lands instead', async () => {
+    const { controller } = makeContext({ models: [{ id: 'm1' }] })
+    await controller.load()
+    const provider = controller.byRoute.get('p1')!
+    controller.recordPending(provider, 'm1', 'input', ['text', 'image'])
+    await controller.writeField(provider, 0, 'input', ['text'])
+    expect(controller.readIntent('p1', 'm1')).toBeUndefined()
+  })
+
+  it('keeps a staged reasoning choice gated when a direct input write lands', async () => {
+    const { controller, mutateLog } = makeContext({ models: [{ id: 'm1' }] })
+    await controller.load()
+    const provider = controller.byRoute.get('p1')!
+    // A preset staged the thinking choice for the card's save...
+    controller.recordPending(provider, 'm1', 'reasoningEfforts', { high: 'high' })
+    // ...and the provider-level sync wrote image support directly in the meantime.
+    await controller.writeField(provider, 0, 'input', ['text', 'image'])
+    expect(mutateLog).toHaveLength(1)
+    // The image seed is retired; the staged thinking choice is still pending, so
+    // a topology reload must not land it behind the open card.
+    expect(controller.readIntent('p1', 'm1')).toMatchObject({ reasoningEfforts: { high: 'high' }, pending: true })
+    await controller.load('boot')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(mutateLog).toHaveLength(1)
   })
 })

@@ -7,13 +7,15 @@ import { sweepOnce } from '../src/client/enhance.ts'
 import type { Translator } from '../src/client/enhance.ts'
 
 /**
- * A faithful slice of the official Models editor DOM: one provider editor card
- * holding one model entry, whose capacity disclosure (modelAdvanced) carries
- * the numeric capacity inputs. The capability block is injected as a SIBLING of
- * that disclosure (inside the model entry) so it spans the full row width, and
+ * A faithful slice of the official Models editor DOM (DSH 0.2.0-rc.1): one
+ * provider editor card holding one model entry, whose capacity disclosure
+ * (modelAdvanced) carries the numeric capacity inputs AND the official
+ * 输入类型 (text/image) checkpoint fieldset bound to the same `input` field the
+ * plugin seeds. The capability block is injected as a SIBLING of that
+ * disclosure (inside the model entry) so it spans the full row width, and
  * mirrors the disclosure's open/closed state so the chevron collapses both.
  */
-function buildEditorDom(opts: { expanded: boolean; modelId?: string; capacity?: [string, string] }): void {
+function buildEditorDom(opts: { expanded: boolean; modelId?: string; capacity?: [string, string]; inputTypes?: boolean }): void {
   const editor = document.createElement('div')
   const header = document.createElement('div')
   const title = document.createElement('span')
@@ -54,6 +56,19 @@ function buildEditorDom(opts: { expanded: boolean; modelId?: string; capacity?: 
       field.append(span, input)
       advanced.appendChild(field)
     }
+    // The official per-model input-type control (0.2.0-rc.1) — the plugin must
+    // neither duplicate nor touch it.
+    const inputTypes = document.createElement('fieldset')
+    inputTypes.setAttribute('data-test-input-types', '')
+    for (const modality of ['text', 'image']) {
+      const label = document.createElement('label')
+      const box = document.createElement('input')
+      box.type = 'checkbox'
+      box.checked = (opts.inputTypes ?? true) && modality === 'text'
+      label.append(box, document.createTextNode(modality))
+      inputTypes.appendChild(label)
+    }
+    advanced.appendChild(inputTypes)
     entry.appendChild(advanced)
   }
 
@@ -66,7 +81,7 @@ function buildEditorDom(opts: { expanded: boolean; modelId?: string; capacity?: 
   document.body.appendChild(editor)
 }
 
-function fakeApi(opts: { dormant?: string[]; proxy?: string } = {}) {
+function fakeApi(opts: { dormant?: string[] } = {}) {
   const models = [
     {
       id: 'deepseek-v4-flash',
@@ -95,7 +110,7 @@ function fakeApi(opts: { dormant?: string[]; proxy?: string } = {}) {
     })),
   ]
   const userProviders: Record<string, { models: unknown[] }> = {
-    router9: { models, ...(opts.proxy !== undefined ? { proxy: opts.proxy } : {}) },
+    router9: { models },
   }
   const mutateCalls: { ns: string; ops: unknown[] }[] = []
   const settings = {
@@ -166,11 +181,21 @@ describe('models-editor injection (capacity disclosure)', () => {
     expect(block!.hidden).toBe(false)
     expect(block!.getAttribute('data-mp-provider')).toBe('router9')
     expect(block!.getAttribute('data-mp-index')).toBe('0')
-    // Values synced from the stored entry.
-    const imageSel = block!.querySelector('[data-mp-image]') as HTMLSelectElement
-    expect(imageSel.value).toBe('image')
+    // Only the reasoning control is injected: 0.2.0-rc.1's official row owns
+    // the image checkboxes, so the block carries no image control at all.
+    expect(block!.querySelector('[data-mp-image]')).toBeNull()
+    expect(block!.querySelectorAll('select')).toHaveLength(1)
     const reasonSel = block!.querySelector('[data-mp-reason]') as HTMLSelectElement
     expect(reasonSel.value).toBe('custom')
+    // The official text/image checkpoint fieldset is left exactly as rendered:
+    // still in the disclosure, still checked text-only, no plugin markers.
+    const official = advanced.querySelector('[data-test-input-types]') as HTMLElement
+    expect(official).not.toBeNull()
+    expect(advanced.contains(official)).toBe(true)
+    const boxes = [...official.querySelectorAll('input[type="checkbox"]')] as HTMLInputElement[]
+    expect(boxes).toHaveLength(2)
+    expect(boxes.map((box) => box.checked)).toEqual([true, false])
+    expect(official.querySelector('[data-mp-image]')).toBeNull()
     // Committed row: no pre-save banner, no pending binding.
     expect(block!.querySelector('[data-mp-pending-note]')!.hidden).toBe(true)
     expect(block!.hasAttribute('data-mp-pending-id')).toBe(false)
@@ -213,7 +238,7 @@ describe('models-editor injection (capacity disclosure)', () => {
     expect(block.hidden).toBe(false)
   })
 
-  it('writes input on image select change (block beside disclosure)', async () => {
+  it('writes reasoningEfforts on select change (block beside disclosure)', async () => {
     document.body.innerHTML = ''
     const { settings, llm, mutateCalls } = fakeApi()
     const controller = new ModelCapabilityController(settings, llm)
@@ -222,23 +247,24 @@ describe('models-editor injection (capacity disclosure)', () => {
     sweepOnce(controller, t)
 
     const block = document.querySelector('[data-mp-block]')!
-    const imageSel = block.querySelector('[data-mp-image]') as HTMLSelectElement
-    imageSel.value = 'text'
-    imageSel.dispatchEvent(new Event('change'))
+    const reasonSel = block.querySelector('[data-mp-reason]') as HTMLSelectElement
+    reasonSel.value = 'off'
+    reasonSel.dispatchEvent(new Event('change'))
     await new Promise((resolve) => setTimeout(resolve, 0))
 
     expect(mutateCalls.length).toBe(1)
     const op = mutateCalls[0].ops[0] as { op: string; path: string[]; value: unknown }
     // The settings walker cannot address array elements, so the write is one
-    // whole-array `set` carrying the patched entry; other fields survive.
+    // whole-array `set` carrying the patched entry; other fields survive —
+    // including the `input` the official checkbox rendered.
     expect(op.op).toBe('set')
     expect(op.path).toEqual(['providers', 'router9', 'models'])
     expect(op.value).toEqual([
       {
         id: 'deepseek-v4-flash',
         contextWindow: 1000000,
-        input: ['text'],
-        reasoningEfforts: { off: null, high: 'high' },
+        input: ['text', 'image'],
+        reasoningEfforts: false,
       },
       { id: 'mimo-v2.5-free' },
     ])
@@ -293,12 +319,12 @@ describe('models-editor injection (capacity disclosure)', () => {
     expect(block.querySelector('[data-mp-pending-note]')!.hidden).toBe(true)
 
     // The preset button shows the matched values and stages them — no write.
+    // Image support has no plugin control any more, so only the reasoning
+    // select reflects the staged preset.
     const presetBtn = block.querySelector('[data-mp-preset]') as HTMLButtonElement
     presetBtn.click()
     await vi.waitFor(() => {
       expect(mutateCalls.length).toBe(0)
-      const imageSel = block.querySelector('[data-mp-image]') as HTMLSelectElement
-      expect(imageSel.value).toBe('image')
       const reasonSel = block.querySelector('[data-mp-reason]') as HTMLSelectElement
       expect(reasonSel.value).toBe('custom')
     })
@@ -309,10 +335,13 @@ describe('models-editor injection (capacity disclosure)', () => {
     // fields one whole-array set per field, fenced by the fresh revision.
     await controller.load('settings')
     await vi.waitFor(() => expect(mutateCalls.length).toBe(2))
-    // Both writes completed and the staged choice settled into a committed one.
+    // Both writes completed; the seeded image value is retired, the reasoning
+    // choice stays remembered.
     await vi.waitFor(() => {
       expect(controller.readIntent('router9', 'glm-5.5-air')?.pending).toBe(false)
     })
+    expect(controller.readIntent('router9', 'glm-5.5-air')?.input).toBeUndefined()
+    expect(controller.readIntent('router9', 'glm-5.5-air')?.reasoningEfforts).toEqual({ high: 'high' })
     const op = mutateCalls[0].ops[0] as { op: string; path: string[]; value: unknown }
     expect(op.op).toBe('set')
     expect(op.path).toEqual(['providers', 'router9', 'models'])
@@ -330,8 +359,8 @@ describe('models-editor injection (capacity disclosure)', () => {
     // Landed: a sweep now reads the stored entry, staged hint gone.
     sweepOnce(controller, t)
     expect(block.querySelector('[data-mp-pending-note]')!.hidden).toBe(true)
-    const settledImage = block.querySelector('[data-mp-image]') as HTMLSelectElement
-    expect(settledImage.value).toBe('image')
+    const settledReason = block.querySelector('[data-mp-reason]') as HTMLSelectElement
+    expect(settledReason.value).toBe('custom')
   })
 })
 
@@ -366,8 +395,6 @@ describe('staged (unsaved) model rows — fetch-catalog adds', () => {
 
     // The auto preset reflects in the block without any settings write.
     await vi.waitFor(() => {
-      const imageSel = document.querySelector('[data-mp-image]') as HTMLSelectElement
-      expect(imageSel.value).toBe('image')
       const reasonSel = document.querySelector('[data-mp-reason]') as HTMLSelectElement
       expect(reasonSel.value).toBe('custom')
     })
@@ -375,9 +402,9 @@ describe('staged (unsaved) model rows — fetch-catalog adds', () => {
 
     // A manual choice on the staged row overrides the preset for that field
     // and still writes nothing until the official editor saves.
-    const imageSel = document.querySelector('[data-mp-image]') as HTMLSelectElement
-    imageSel.value = 'text'
-    imageSel.dispatchEvent(new Event('change'))
+    const reasonSel = document.querySelector('[data-mp-reason]') as HTMLSelectElement
+    reasonSel.value = 'off'
+    reasonSel.dispatchEvent(new Event('change'))
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(mutateCalls.length).toBe(0)
 
@@ -401,8 +428,8 @@ describe('staged (unsaved) model rows — fetch-catalog adds', () => {
       {
         id: STAGED_ID,
         contextWindow: 128000,
-        input: ['text'],                       // the manual override
-        reasoningEfforts: { high: 'high' },    // from the auto preset
+        input: ['text', 'image'],              // from the auto preset
+        reasoningEfforts: false,               // the manual override
       },
     ])
 
@@ -412,8 +439,8 @@ describe('staged (unsaved) model rows — fetch-catalog adds', () => {
     expect(block.hasAttribute('data-mp-pending-id')).toBe(false)
     expect(block.getAttribute('data-mp-index')).toBe('2')
     expect(block.querySelector('[data-mp-pending-note]')!.hidden).toBe(true)
-    const landedImage = block.querySelector('[data-mp-image]') as HTMLSelectElement
-    expect(landedImage.value).toBe('text')
+    const landedReason = block.querySelector('[data-mp-reason]') as HTMLSelectElement
+    expect(landedReason.value).toBe('off')
   })
 
   it('never writes a staged choice while the model stays out of settings', async () => {
@@ -424,9 +451,9 @@ describe('staged (unsaved) model rows — fetch-catalog adds', () => {
     buildEditorDom({ expanded: true, modelId: 'never-saved-model' })
     sweepOnce(controller, t)
     const block = document.querySelector('[data-mp-block]') as HTMLElement
-    const imageSel = block.querySelector('[data-mp-image]') as HTMLSelectElement
-    imageSel.value = 'image'
-    imageSel.dispatchEvent(new Event('change'))
+    const reasonSel = block.querySelector('[data-mp-reason]') as HTMLSelectElement
+    reasonSel.value = 'off'
+    reasonSel.dispatchEvent(new Event('change'))
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(mutateCalls.length).toBe(0)
 
@@ -548,17 +575,15 @@ describe('draft provider editor (add custom provider)', () => {
 
     // Auto preset from models.dev, reflected in the block without any write.
     await vi.waitFor(() => {
-      const imageSel = document.querySelector('[data-mp-image]') as HTMLSelectElement
-      expect(imageSel.value).toBe('image')
       const reasonSel = document.querySelector('[data-mp-reason]') as HTMLSelectElement
       expect(reasonSel.value).toBe('custom')
     })
     expect(mutateCalls.length).toBe(0)
 
-    // Manual override of one field still writes nothing pre-creation.
-    const imageSel = document.querySelector('[data-mp-image]') as HTMLSelectElement
-    imageSel.value = 'text'
-    imageSel.dispatchEvent(new Event('change'))
+    // Manual override of the reasoning field still writes nothing pre-creation.
+    const reasonSel = document.querySelector('[data-mp-reason]') as HTMLSelectElement
+    reasonSel.value = 'off'
+    reasonSel.dispatchEvent(new Event('change'))
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(mutateCalls.length).toBe(0)
 
@@ -575,7 +600,7 @@ describe('draft provider editor (add custom provider)', () => {
     }
     const final = mutateCalls[1].ops[0] as { value: unknown }
     expect(final.value).toEqual([
-      { id: DB_MODEL, contextWindow: 64000, input: ['text'], reasoningEfforts: { high: 'high' } },
+      { id: DB_MODEL, contextWindow: 64000, input: ['text', 'image'], reasoningEfforts: false },
     ])
   })
 
@@ -586,9 +611,9 @@ describe('draft provider editor (add custom provider)', () => {
     await controller.load()
     buildDraftEditorDom({ providerId: DRAFT_ID, modelId: 'm1' })
     sweepOnce(controller, t)
-    const imageSel = document.querySelector('[data-mp-image]') as HTMLSelectElement
-    imageSel.value = 'image'
-    imageSel.dispatchEvent(new Event('change'))
+    const reasonSel = document.querySelector('[data-mp-reason]') as HTMLSelectElement
+    reasonSel.value = 'off'
+    reasonSel.dispatchEvent(new Event('change'))
     expect(controller.readIntent(DRAFT_ID, 'm1')).toBeDefined()
 
     // Retype the Provider ID: the old id's staged choices are disowned.
@@ -609,9 +634,9 @@ describe('draft provider editor (add custom provider)', () => {
     await controller.load()
     buildDraftEditorDom({ providerId: DRAFT_ID, modelId: 'm1' })
     sweepOnce(controller, t)
-    const imageSel = document.querySelector('[data-mp-image]') as HTMLSelectElement
-    imageSel.value = 'image'
-    imageSel.dispatchEvent(new Event('change'))
+    const reasonSel = document.querySelector('[data-mp-reason]') as HTMLSelectElement
+    reasonSel.value = 'off'
+    reasonSel.dispatchEvent(new Event('change'))
 
     // Cancel: the card disappears; the pending choice stays dormant (never
     // written) unless a provider with that exact id and model appears.
@@ -636,15 +661,19 @@ describe('draft provider editor (add custom provider)', () => {
     expect(blocks.length).toBe(2)
     const blockA = blocks.find((b) => b.getAttribute('data-mp-pending-id') === 'm-a')!
     const blockB = blocks.find((b) => b.getAttribute('data-mp-pending-id') === 'm-b')!
-    const imageA = blockA.querySelector('[data-mp-image]') as HTMLSelectElement
-    imageA.value = 'image'
-    imageA.dispatchEvent(new Event('change'))
+    // A: no reasoning at all. B: a custom level set.
+    const reasonA = blockA.querySelector('[data-mp-reason]') as HTMLSelectElement
+    reasonA.value = 'off'
+    reasonA.dispatchEvent(new Event('change'))
     const reasonB = blockB.querySelector('[data-mp-reason]') as HTMLSelectElement
-    reasonB.value = 'off'
+    reasonB.value = 'custom'
     reasonB.dispatchEvent(new Event('change'))
+    const highB = blockB.querySelector('[data-mp-level="high"]') as HTMLInputElement
+    highB.checked = true
+    highB.dispatchEvent(new Event('change'))
 
-    expect(controller.readIntent(DRAFT_ID, 'm-a')?.input).toEqual(['text', 'image'])
-    expect(controller.readIntent(DRAFT_ID, 'm-b')?.reasoningEfforts).toBe(false)
+    expect(controller.readIntent(DRAFT_ID, 'm-a')?.reasoningEfforts).toBe(false)
+    expect(controller.readIntent(DRAFT_ID, 'm-b')?.reasoningEfforts).toEqual({ high: 'high' })
     expect(mutateCalls.length).toBe(0)
   })
 })
@@ -759,8 +788,6 @@ describe('add-provider card (dormant catalog route draft)', () => {
     sweepOnce(controller, t)
 
     await vi.waitFor(() => {
-      const imageSel = document.querySelector('[data-mp-image]') as HTMLSelectElement
-      expect(imageSel.value).toBe('image')
       const reasonSel = document.querySelector('[data-mp-reason]') as HTMLSelectElement
       expect(reasonSel.value).toBe('custom')
     })
@@ -793,9 +820,9 @@ describe('add-provider card (dormant catalog route draft)', () => {
     await controller.load()
     const select = buildAddCardDom({ route: ROUTE, routes: [ROUTE, other], modelId: 'm1' })
     sweepOnce(controller, t)
-    const imageSel = document.querySelector('[data-mp-image]') as HTMLSelectElement
-    imageSel.value = 'image'
-    imageSel.dispatchEvent(new Event('change'))
+    const reasonSel = document.querySelector('[data-mp-reason]') as HTMLSelectElement
+    reasonSel.value = 'off'
+    reasonSel.dispatchEvent(new Event('change'))
     expect(controller.readIntent(ROUTE, 'm1')).toBeDefined()
 
     // Switch the dormant-route chooser: the old route's staged choices are
@@ -911,113 +938,6 @@ describe('capacity auto-preset (contextWindow / maxTokens)', () => {
     expect(inputs[1].value).toBe('131072')
     // Capacity-only preset: no image/reasoning opinion, so no settings write.
     expect(mutateCalls.length).toBe(0)
-  })
-})
-
-describe('provider proxy block', () => {
-  const proxyBlock = (): HTMLElement | null => document.querySelector('[data-mp-proxy-block]')
-
-  it('injects one provider-level proxy block on the provider card', async () => {
-    document.body.innerHTML = ''
-    const { settings, llm } = fakeApi()
-    const controller = new ModelCapabilityController(settings, llm)
-    await controller.load()
-    buildEditorDom({ expanded: true })
-    sweepOnce(controller, t)
-
-    const block = proxyBlock()
-    expect(block).not.toBeNull()
-    expect(block!.getAttribute('data-mp-provider')).toBe('router9')
-    // The proxy block is a child of the provider card (not a model entry).
-    const card = block!.parentElement
-    expect(card!.querySelector('header')).toBeNull()
-    expect(card!.querySelector('[data-mp-block]')).not.toBeNull()
-  })
-
-  it('is unchecked by default with the URL input hidden', async () => {
-    document.body.innerHTML = ''
-    const { settings, llm } = fakeApi()
-    const controller = new ModelCapabilityController(settings, llm)
-    await controller.load()
-    buildEditorDom({ expanded: true })
-    sweepOnce(controller, t)
-
-    const box = document.querySelector('[data-mp-proxy-enabled]') as HTMLInputElement
-    const url = document.querySelector('[data-mp-proxy-url]') as HTMLInputElement
-    expect(box.checked).toBe(false)
-    expect(url.hidden).toBe(true)
-    expect(url.disabled).toBe(true)
-  })
-
-  it('reflects a committed proxy profile (enabled + stored URL)', async () => {
-    document.body.innerHTML = ''
-    const { settings, llm } = fakeApi({ proxy: 'http://127.0.0.1:7890' })
-    const controller = new ModelCapabilityController(settings, llm)
-    await controller.load()
-    buildEditorDom({ expanded: true })
-    sweepOnce(controller, t)
-
-    const box = document.querySelector('[data-mp-proxy-enabled]') as HTMLInputElement
-    const url = document.querySelector('[data-mp-proxy-url]') as HTMLInputElement
-    expect(box.checked).toBe(true)
-    expect(url.hidden).toBe(false)
-    expect(url.disabled).toBe(false)
-    expect(url.value).toBe('http://127.0.0.1:7890')
-  })
-
-  it('checking the box writes the default proxy URL', async () => {
-    document.body.innerHTML = ''
-    const { settings, llm, mutateCalls } = fakeApi()
-    const controller = new ModelCapabilityController(settings, llm)
-    await controller.load()
-    buildEditorDom({ expanded: true })
-    sweepOnce(controller, t)
-
-    const box = document.querySelector('[data-mp-proxy-enabled]') as HTMLInputElement
-    const url = document.querySelector('[data-mp-proxy-url]') as HTMLInputElement
-    box.click()
-    expect(box.checked).toBe(true)
-    expect(url.value).toBe('http://127.0.0.1:7890')
-    await vi.waitFor(() => expect(mutateCalls.length).toBe(1))
-    expect(mutateCalls[0]).toMatchObject({
-      ns: 'llm-pi-ai',
-      ops: [{ op: 'set', path: ['providers', 'router9', 'proxy'], value: 'http://127.0.0.1:7890' }],
-    })
-  })
-
-  it('writes a custom proxy URL when the user edits the field', async () => {
-    document.body.innerHTML = ''
-    const { settings, llm, mutateCalls } = fakeApi()
-    const controller = new ModelCapabilityController(settings, llm)
-    await controller.load()
-    buildEditorDom({ expanded: true })
-    sweepOnce(controller, t)
-
-    const box = document.querySelector('[data-mp-proxy-enabled]') as HTMLInputElement
-    const url = document.querySelector('[data-mp-proxy-url]') as HTMLInputElement
-    box.click()
-    url.value = 'http://my-proxy.local:8080'
-    url.dispatchEvent(new Event('change'))
-    await vi.waitFor(() => expect(mutateCalls.length).toBe(2))
-    expect(mutateCalls[1]).toMatchObject({
-      ops: [{ op: 'set', path: ['providers', 'router9', 'proxy'], value: 'http://my-proxy.local:8080' }],
-    })
-  })
-
-  it('unchecking the box writes an unset (clears the field)', async () => {
-    document.body.innerHTML = ''
-    const { settings, llm, mutateCalls } = fakeApi({ proxy: 'http://127.0.0.1:7890' })
-    const controller = new ModelCapabilityController(settings, llm)
-    await controller.load()
-    buildEditorDom({ expanded: true })
-    sweepOnce(controller, t)
-
-    const box = document.querySelector('[data-mp-proxy-enabled]') as HTMLInputElement
-    box.click()
-    await vi.waitFor(() => expect(mutateCalls.length).toBe(1))
-    expect(mutateCalls[0]).toMatchObject({
-      ops: [{ op: 'unset', path: ['providers', 'router9', 'proxy'] }],
-    })
   })
 })
 
