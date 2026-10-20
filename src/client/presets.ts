@@ -5,13 +5,16 @@
  * 换算成 llm-pi-ai 的 `input`、`reasoningEfforts`、`contextWindow` 与
  * `maxTokens` 字段的取值。
  *
- * 匹配策略面向网关路由的模型 ID（如 `ag/gemini-3.7-flash-high`）：
- *  1. 去 `/` 前缀后再匹配；
- *  2. 容忍网关附加的思考档后缀（`-high` / `-medium` / `-low` 等），剥一层再匹配；
+ * 匹配策略面向带网关/命名空间前缀的模型 ID（`ag/gemini-3.7-flash-high`、
+ * `cn:deepseek-v4.1-flash`）：
+ *  1. 逐层剥掉命名空间前缀——`/` 与 `:` 两种分隔符都算（`cn:`、`ag/`、
+ *     `openrouter/anthropic:`），每剥一层都是一个候选；
+ *  2. 每层再剥一层网关附加的思考档后缀（`-high` / `-medium` / `-low` 等）；
  *  3. 同名条目一方厂商（zai / google / deepseek…）优先于聚合网关的别名条目。
  */
 
-import { THINKING_LEVELS } from './core.ts'
+/** The seven pi-ai thinking levels, in escalation order. */
+export const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 
 /** One models.dev model entry, restricted to the fields the preset needs. */
 export interface ModelsDevModel {
@@ -49,16 +52,32 @@ const FIRST_PARTY = new Set([
   'mistral', 'cohere', 'alibaba', 'alibaba-cn', 'tencent', 'baidu', 'stepfun', 'xiaomi',
 ])
 
+/** One leading namespace separator: a gateway route prefix (`ag/…`) or a catalog namespace (`cn:…`). */
+const NAMESPACE_PREFIX = /^[^:/\\]+[:/]/
+
 /** Gateway suffixes that pin a thinking level onto a base model id. */
 const THINKING_SUFFIX = /-(high|medium|low|extra-low|thinking|none)$/
+
+/** Deepest namespace chain peeled off one id; real gateways nest at most twice. */
+const MAX_PREFIX_DEPTH = 3
 
 /** Model-id candidates for one catalog id, most specific first. */
 export function candidatesOf(modelId: string): string[] {
   const raw = modelId.trim().toLowerCase()
   if (raw.length === 0) return []
-  const afterSlash = raw.includes('/') ? raw.slice(raw.lastIndexOf('/') + 1) : raw
-  const stripped = afterSlash.replace(THINKING_SUFFIX, '')
-  return Array.from(new Set([raw, afterSlash, stripped].filter((c) => c.length > 0)))
+  const candidates: string[] = [raw]
+  const push = (candidate: string): void => {
+    if (candidate.length > 0 && !candidates.includes(candidate)) candidates.push(candidate)
+  }
+  let peeled = raw
+  for (let depth = 0; depth < MAX_PREFIX_DEPTH; depth++) {
+    const next = peeled.replace(NAMESPACE_PREFIX, '')
+    if (next === peeled || next.length === 0) break
+    push(next)
+    push(next.replace(THINKING_SUFFIX, ''))
+    peeled = next
+  }
+  return candidates
 }
 
 /**

@@ -26,6 +26,11 @@ const db: ModelsDevDb = {
         modalities: { input: ['text'] },
         reasoning: true,
       },
+      // The id a `cn:`-prefixed catalog route must resolve to.
+      'deepseek-v4.1-flash': {
+        modalities: { input: ['text', 'image'] },
+        reasoning_options: [{ type: 'effort', values: ['low', 'high'] }],
+      },
     },
   },
   'some-gateway': {
@@ -60,7 +65,7 @@ const db: ModelsDevDb = {
 const index = buildIndex(db)
 
 describe('candidatesOf', () => {
-  it('strips gateway prefixes and one thinking-level suffix', () => {
+  it('strips a route prefix and one thinking-level suffix', () => {
     expect(candidatesOf('ag/gemini-3.7-flash-high')).toEqual([
       'ag/gemini-3.7-flash-high',
       'gemini-3.7-flash-high',
@@ -68,9 +73,27 @@ describe('candidatesOf', () => {
     ])
   })
 
-  it('keeps non-thinking suffixes and dedupes', () => {
+  it('strips a colon namespace prefix (cn:deepseek-v4.1-flash)', () => {
+    expect(candidatesOf('cn:deepseek-v4.1-flash')).toEqual([
+      'cn:deepseek-v4.1-flash',
+      'deepseek-v4.1-flash',
+    ])
+  })
+
+  it('peels a nested prefix chain and strips the suffix at every level', () => {
+    expect(candidatesOf('openrouter/anthropic:claude-x-high')).toEqual([
+      'openrouter/anthropic:claude-x-high',
+      'anthropic:claude-x-high',
+      'anthropic:claude-x',
+      'claude-x-high',
+      'claude-x',
+    ])
+  })
+
+  it('keeps a thinking-like infix, lowercases, and rejects a blank id', () => {
     expect(candidatesOf('mimo-v2.5-free')).toEqual(['mimo-v2.5-free'])
     expect(candidatesOf('GLM-5.2')).toEqual(['glm-5.2'])
+    expect(candidatesOf('   ')).toEqual([])
   })
 })
 
@@ -82,9 +105,21 @@ describe('buildIndex / findModel', () => {
     expect(presetOf(hit!).reasoningEfforts).toEqual({ high: 'high', max: 'max' })
   })
 
-  it('matches through gateway prefixes and thinking suffixes', () => {
+  it('matches through route prefixes and thinking suffixes', () => {
     expect(findModel(index, 'ag/gemini-3.7-flash-high')).toBeDefined()
     expect(findModel(index, 'qd/gpt-oss-120b-medium')).toBeDefined()
+  })
+
+  it('matches through a colon namespace prefix', () => {
+    const hit = findModel(index, 'cn:deepseek-v4.1-flash')
+    expect(hit).toBeDefined()
+    expect(presetOf(hit!)).toEqual({
+      input: ['text', 'image'],
+      reasoningEfforts: { low: 'low', high: 'high' },
+    })
+    // The prefix itself may also be part of the catalog id: the raw candidate
+    // wins, so a prefixed entry is never shadowed by its stripped form.
+    expect(findModel(index, 'cn:deepseek-v4.1-flash-high')).toBe(hit)
   })
 
   it('indexes alias spellings', () => {

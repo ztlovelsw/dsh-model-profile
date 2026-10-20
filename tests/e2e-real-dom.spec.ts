@@ -1,4 +1,3 @@
-
 /**
  * @vitest-environment jsdom
  */
@@ -72,10 +71,10 @@ vi.stubGlobal('fetch', async () => ({
 
 /**
  * The REAL official provider-editor + model-row markup, transcribed from
- * dsh-client-ui-settings-models 0.2.0-rc.1 (`ProviderEditor` → `ModelListEditor`
- * → `ModelRow`): the model entry carries the id/display-name row, the capacity
- * disclosure with its numeric inputs, AND the 0.2.0-rc.1 per-model 输入类型
- * (text/image) checkpoint fieldset bound to `input`.
+ * dsh-client-ui-settings-models: the model entry carries the id/display-name
+ * row, the capacity disclosure with its numeric inputs, the official 输入类型
+ * (text/image) checkpoint fieldset bound to `input`, and — current DSH — the
+ * official reasoning-level editor. The plugin must leave ALL of it alone.
  */
 function realModelEditor(modelId: string): void {
   const editor = document.createElement('div')
@@ -147,6 +146,24 @@ function realModelEditor(modelId: string): void {
   }
   inputTypes.append(legend, choices)
   advanced.appendChild(inputTypes)
+
+  // The official reasoning-level editor (current DSH): one row per offered
+  // level, each with a checkbox and its wire-value input.
+  const levels = document.createElement('fieldset')
+  levels.className = 'zGbnIq_modelReasoning'
+  levels.setAttribute('aria-label', '推理等级 1')
+  for (const level of ['off', 'high']) {
+    const label = document.createElement('label')
+    const box = document.createElement('input')
+    box.type = 'checkbox'
+    box.checked = level === 'high'
+    const wire = document.createElement('input')
+    wire.type = 'text'
+    wire.value = level === 'off' ? '' : level
+    label.append(box, document.createTextNode(level), wire)
+    levels.appendChild(label)
+  }
+  advanced.appendChild(levels)
   entry.appendChild(advanced)
 
   const catalog = document.createElement('section')
@@ -167,8 +184,8 @@ function realModelEditor(modelId: string): void {
   document.body.appendChild(editor)
 }
 
-describe('real official model-row markup (0.2.0-rc.1)', () => {
-  it('injects the reasoning block beside the capacity disclosure and never touches the official input types', async () => {
+describe('real official model-row markup', () => {
+  it('injects nothing into the rows the official editor now owns', async () => {
     document.body.innerHTML = ''
     const { settings, llm } = fakeApi()
     const controller = new ModelCapabilityController(settings, llm)
@@ -176,28 +193,19 @@ describe('real official model-row markup (0.2.0-rc.1)', () => {
     realModelEditor('glm-5.5-air')
     sweepOnce(controller, t)
 
-    const entry = document.querySelector('.zGbnIq_modelEntry')!
-    const advanced = document.querySelector('.zGbnIq_modelAdvanced')!
-    const block = entry.querySelector(':scope > [data-mp-block]') as HTMLElement
-    expect(block).not.toBeNull()
-    // Sibling of the disclosure, inside the model entry (full row width).
-    expect(block.parentElement).toBe(entry)
-    expect(advanced.parentElement).toBe(entry)
-    expect(block.getAttribute('data-mp-provider')).toBe('router9')
-    expect(block.getAttribute('data-mp-index')).toBe('0')
+    // No plugin element, control, or attribute may appear in the editor card:
+    // 输入类型 and 推理等级 are official controls now.
+    expect(document.querySelector('[data-mp-block]')).toBeNull()
+    expect(document.querySelector('.zGbnIq_modelEntry select')).toBeNull()
+    expect(document.querySelector('.zGbnIq_modelReasoning [data-mp-level]')).toBeNull()
 
-    // The plugin's block owns the reasoning control only: 0.2.0-rc.1's official
-    // row owns `input`, so no image control is injected anywhere.
-    expect(block.querySelectorAll('select')).toHaveLength(1)
-    expect(document.querySelector('[data-mp-image]')).toBeNull()
-
-    // The official text/image checkboxes survive untouched: same nodes, same
-    // checked state, no plugin attribute in their subtree.
+    // The official checkboxes survive untouched: same nodes, same state.
     const official = document.querySelector('.zGbnIq_modelInputTypes') as HTMLElement
-    expect(advanced.contains(official)).toBe(true)
     const boxes = [...official.querySelectorAll('input[type="checkbox"]')] as HTMLInputElement[]
     expect(boxes.map((box) => box.checked)).toEqual([true, false])
-    expect(official.querySelector('[data-mp-block], [data-mp-image]')).toBeNull()
+    const reasoning = document.querySelector('.zGbnIq_modelReasoning') as HTMLElement
+    const levelBoxes = [...reasoning.querySelectorAll('input[type="checkbox"]')] as HTMLInputElement[]
+    expect(levelBoxes.map((box) => box.checked)).toEqual([false, true])
   })
 })
 

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { ModelCapabilityController } from '../src/client/controller.ts'
 
 /**
@@ -77,7 +77,7 @@ function makeContext(opts: {
     listConfigurableProviders: async () => ({ ok: true as const, value: [provider] }),
   }
 
-  return { controller: new ModelCapabilityController(settings, llm), mutateLog, releaseHeld: () => releaseHeld(), settings }
+  return { controller: new ModelCapabilityController(settings, llm), mutateLog, releaseHeld: () => releaseHeld() }
 }
 
 describe('writeField', () => {
@@ -144,209 +144,48 @@ describe('writeField', () => {
     expect(models[0]).toMatchObject({ input: ['text', 'image'], reasoningEfforts: false })
     expect(controller.byRoute.get('p1')?.revision).toBe(3)
   })
-
-  describe('staged (pending) choices', () => {
-    it('lands staged choices only after a settings reload, and once', async () => {
-      const { controller, mutateLog } = makeContext({ models: [{ id: 'm1' }] })
-      await controller.load()
-      // The preset button stages without writing.
-      controller.recordPending(controller.byRoute.get('p1')!, 'm1', 'input', ['text', 'image'])
-      // A provider-topology reload must not write behind an open card.
-      await controller.load('boot')
-      expect(mutateLog).toHaveLength(0)
-      await controller.load('adapters')
-      expect(mutateLog).toHaveLength(0)
-      // The official save promotes the model to a settings reload: staged values land.
-      await controller.load('settings')
-      await vi.waitFor(() => {
-        expect(controller.byRoute.get('p1')?.models[0]).toMatchObject({ input: ['text', 'image'] })
-      })
-      expect(mutateLog).toHaveLength(1)
-      expect(mutateLog[0].expectedRevision).toBe(1)
-      // Landed once: a later non-settings reload must not write again.
-      await controller.load('boot')
-      expect(mutateLog).toHaveLength(1)
-    })
-
-    it('keeps a staged choice pending while the model stays out of settings', async () => {
-      const { controller, mutateLog } = makeContext({ models: [{ id: 'm1' }] })
-      await controller.load()
-      controller.recordPending(controller.byRoute.get('p1')!, 'ghost', 'reasoningEfforts', { high: 'high' })
-      await controller.load('settings')
-      expect(mutateLog).toHaveLength(0)
-      // Even after another settings write, the absent model keeps waiting.
-      await controller.load('settings')
-      expect(mutateLog).toHaveLength(0)
-    })
-
-    it('lands staged choices when a settings reload is superseded by an adapters reload', async () => {
-      // Default-gated: without the fix, a `settings` reload that loses the
-      // generation race never lands staged choices, so the official save's
-      // reasoningEfforts would be silently dropped.
-      const { controller, mutateLog, settings } = makeContext({ models: [{ id: 'm1' }] })
-      await controller.load()
-      controller.recordPending(controller.byRoute.get('p1')!, 'm1', 'reasoningEfforts', { high: 'high' })
-      expect(mutateLog).toHaveLength(0)
-
-      // The official save fires settings/document-updated; its reload starts
-      // first but its describe is slow.
-      let gate: () => void = () => undefined
-      let gatePromise = new Promise<void>((resolve) => (gate = resolve))
-      const origDescribe = settings.describe
-      let blocked = false
-      settings.describe = async () => {
-        if (!blocked) {
-          blocked = true
-          await gatePromise
-        }
-        return origDescribe()
-      }
-      const settingsLoad = controller.load('settings')
-      await new Promise((resolve) => setTimeout(resolve, 0))
-      // The later llm/adapters-updated reload completes first and supersedes it.
-      await controller.load('adapters')
-      gate()
-      await settingsLoad
-
-      // The superseded settings load no longer gates on `lastLoadReason`: the
-      // adapters reload's reconcile saw a settings write had committed and
-      // landed the staged reasoningEfforts.
-      await vi.waitFor(() => {
-        expect(controller.byRoute.get('p1')?.models[0]).toMatchObject({ reasoningEfforts: { high: 'high' } })
-      })
-      expect(controller.readIntent('p1', 'm1')).toMatchObject({ pending: false })
-    })
-  })
 })
 
-describe('directoryByRoute (add-provider draft resolution)', () => {
-  it('records dormant catalog routes that byRoute skips, and never foreign namespaces', async () => {
-    const configured = { provider: 'p1', displayName: 'P1', settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'p1'] }
-    const dormant = { provider: 'openai', displayName: 'openai', settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'openai'] }
-    const foreign = { provider: 'deepseek-official', displayName: 'DeepSeek', settingsNs: 'llm-deepseek', settingsPath: [] as string[] }
-    const userProviders = { p1: { models: [{ id: 'm1' }] } }
+describe('join', () => {
+  it('skips a namespace whose user layer inherits the catalog model list', async () => {
     const settings = {
       describe: async () => ({
         ok: true as const,
         value: {
           writable: true,
           hasDocument: true,
-          namespaces: [
-            {
-              ns: 'llm-pi-ai',
-              schema: {},
-              value: { providers: userProviders },
-              user: { providers: userProviders },
-              applies: 'live' as const,
-              secrets: [] as unknown[],
-              revision: 4,
-            },
-          ],
+          namespaces: [{
+            ns: 'llm-pi-ai',
+            schema: {},
+            value: { providers: { p1: { models: [{ id: 'catalog-only' }] } } },
+            // Catalog-inherited: the user layer declares no models.
+            user: { providers: { p1: {} } },
+            applies: 'live' as const,
+            secrets: [],
+            revision: 3,
+          }],
         },
       }),
+      mutate: async () => ({ ok: true as const, value: { revision: 4 } }),
     }
     const llm = {
-      listConfigurableProviders: async () => ({ ok: true as const, value: [configured, dormant, foreign] }),
+      listConfigurableProviders: async () => ({
+        ok: true as const,
+        value: [{ provider: 'p1', displayName: 'P1', settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'p1'] }],
+      }),
     }
     const controller = new ModelCapabilityController(settings, llm)
     await controller.load()
-    // The user-owned route is editable; the dormant catalog route is not.
-    expect(controller.byRoute.has('p1')).toBe(true)
-    expect(controller.byRoute.has('openai')).toBe(false)
-    // The directory keeps BOTH pi-ai routes for add-card draft resolution,
-    // and never a route of another namespace.
-    expect(controller.directoryByRoute.get('p1')).toMatchObject({ provider: 'p1', displayName: 'P1' })
-    expect(controller.directoryByRoute.get('openai')).toMatchObject({
-      provider: 'openai',
-      displayName: 'openai',
-      settingsPath: ['providers', 'openai'],
-    })
-    expect(controller.directoryByRoute.has('deepseek-official')).toBe(false)
-  })
-})
-
-describe('capability lifetimes (0.2.0-rc.1: the official row owns `input`)', () => {
-  it('forgets a seeded input once it landed, so an official edit is never reverted', async () => {
-    const { controller, mutateLog, settings } = makeContext({ models: [{ id: 'm1' }] })
-    await controller.load()
-    const provider = controller.byRoute.get('p1')!
-    controller.recordPending(provider, 'm1', 'input', ['text', 'image'])
-    controller.recordPending(provider, 'm1', 'reasoningEfforts', { high: 'high' })
-    await controller.load('settings')
-    await vi.waitFor(() => expect(mutateLog).toHaveLength(2))
-    // The seed landed and was retired; the thinking choice stays remembered.
-    expect(controller.readIntent('p1', 'm1')?.input).toBeUndefined()
-    expect(controller.readIntent('p1', 'm1')).toMatchObject({ reasoningEfforts: { high: 'high' }, pending: false })
-
-    // The user unchecks 图像 in the OFFICIAL text/image control and saves: the
-    // whole-array write lands text-only in settings. (This call is the official
-    // editor's own write, so it counts in the log too.)
-    await settings.mutate('llm-pi-ai', [{
-      op: 'set',
-      path: ['providers', 'p1', 'models'],
-      value: [{ id: 'm1', input: ['text'], reasoningEfforts: { high: 'high' } }],
-    }], 9)
-    const afterOfficialSave = mutateLog.length
-    await controller.load('settings')
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    // Nothing was written back: the official choice wins, and the matching
-    // reasoning value needed no repair either.
-    expect(mutateLog).toHaveLength(afterOfficialSave)
-    expect(controller.byRoute.get('p1')?.models[0]).toMatchObject({ input: ['text'] })
+    expect(controller.loaded).toBe(true)
+    expect(controller.byRoute.has('p1')).toBe(false)
+    expect(controller.findProvider('P1')).toBeUndefined()
   })
 
-  it('re-applies a reasoning choice the official whole-array save dropped', async () => {
-    const { controller, mutateLog, settings } = makeContext({ models: [{ id: 'm1', reasoningEfforts: { high: 'high' } }] })
-    await controller.load()
-    await controller.writeField(controller.byRoute.get('p1')!, 0, 'reasoningEfforts', { low: 'low', high: 'high' })
-    expect(mutateLog).toHaveLength(1)
-
-    // The official card saves from a draft that predates the write, dropping it.
-    await settings.mutate('llm-pi-ai', [{
-      op: 'set',
-      path: ['providers', 'p1', 'models'],
-      value: [{ id: 'm1', input: ['text'] }],
-    }], 9)
-    const afterOfficialSave = mutateLog.length
-    await controller.load('settings')
-    await vi.waitFor(() => {
-      expect(controller.byRoute.get('p1')?.models[0]).toMatchObject({ reasoningEfforts: { low: 'low', high: 'high' } })
-    })
-    // Exactly one repair write on top of the official save.
-    expect(mutateLog).toHaveLength(afterOfficialSave + 1)
-  })
-
-  it('does not remember a direct input write (official control owns the field)', async () => {
+  it('resolves a provider by route id or display name', async () => {
     const { controller } = makeContext({ models: [{ id: 'm1' }] })
     await controller.load()
-    const failure = await controller.writeField(controller.byRoute.get('p1')!, 0, 'input', ['text', 'image'])
-    expect(failure).toBeUndefined()
-    expect(controller.readIntent('p1', 'm1')).toBeUndefined()
-  })
-
-  it('drops a staged input seed when a direct input write lands instead', async () => {
-    const { controller } = makeContext({ models: [{ id: 'm1' }] })
-    await controller.load()
-    const provider = controller.byRoute.get('p1')!
-    controller.recordPending(provider, 'm1', 'input', ['text', 'image'])
-    await controller.writeField(provider, 0, 'input', ['text'])
-    expect(controller.readIntent('p1', 'm1')).toBeUndefined()
-  })
-
-  it('keeps a staged reasoning choice gated when a direct input write lands', async () => {
-    const { controller, mutateLog } = makeContext({ models: [{ id: 'm1' }] })
-    await controller.load()
-    const provider = controller.byRoute.get('p1')!
-    // A preset staged the thinking choice for the card's save...
-    controller.recordPending(provider, 'm1', 'reasoningEfforts', { high: 'high' })
-    // ...and the provider-level sync wrote image support directly in the meantime.
-    await controller.writeField(provider, 0, 'input', ['text', 'image'])
-    expect(mutateLog).toHaveLength(1)
-    // The image seed is retired; the staged thinking choice is still pending, so
-    // a topology reload must not land it behind the open card.
-    expect(controller.readIntent('p1', 'm1')).toMatchObject({ reasoningEfforts: { high: 'high' }, pending: true })
-    await controller.load('boot')
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(mutateLog).toHaveLength(1)
+    expect(controller.findProvider('p1')?.provider).toBe('p1')
+    expect(controller.findProvider('P1')?.provider).toBe('p1')
+    expect(controller.findProvider('  ')).toBeUndefined()
   })
 })

@@ -1,15 +1,14 @@
 /**
- * Model-capability settings — browser half. Injects reasoning-level controls
- * into every model row of the official Models settings editor (the place the
- * official page does not expose), bound to the same provider/settings join the
- * Models page uses, and seeds image support / capacity from models.dev. Writes
- * land as minimal `settings.mutate` path ops against
- * `providers.<route>.models[<i>]` in the `llm-pi-ai` namespace, preserving
- * every hidden field the editor keeps.
+ * Model-capability settings — browser half. Seats one 「同步模型能力」 button in
+ * every editable provider row of the official Models settings editor and, on
+ * click, seeds that provider's models from models.dev (thinking levels, image
+ * support, and gap-filled capacity). Writes land as minimal `settings.mutate`
+ * path ops against `providers.<route>.models` in the `llm-pi-ai` namespace,
+ * preserving every hidden field the editor keeps.
  *
- * Image support itself is not injected: DSH 0.2.0-rc.1's official model row
- * renders its own 输入类型 (text/image) checkboxes, so the plugin only writes
- * `input` when the user asks for a models.dev preset or a bulk sync.
+ * Nothing is injected into the model rows: the official row owns its 输入类型
+ * (text/image) checkboxes and its reasoning-level editor, so the plugin only
+ * seeds those fields — once, and never behind the user's back.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
@@ -22,19 +21,13 @@ import { ModelCapabilityController } from './controller.ts'
 import { bootEnhancer } from './enhance.ts'
 import { en, zh, type ModelProfileKey } from './locales.ts'
 
-export type { CapabilityProvider, DirectoryEntry, ModelCapabilityController } from './controller.ts'
+export type { CapabilityProvider, ModelCapabilityController } from './controller.ts'
 export type { EnhancerHandle, Translator } from './enhance.ts'
 export type { ModelProfileKey } from './locales.ts'
-export {
-  THINKING_LEVELS,
-  type ThinkingLevel,
-  type UiEfforts,
-  type ReasoningMode,
-} from './core.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
-    /** Model-capability injected-controls copy. */
+    /** Model-capability injected-button copy. */
     'model-profile': ModelProfileKey
   }
 }
@@ -68,18 +61,16 @@ export function apply(ctx: ClientContext): void {
   void controller.load()
 
   // Keep the join fresh: settings-document and provider-topology changes.
-  // Only a settings write (`settings` reason) may land staged capability
-  // choices — reloads for other reasons must not write behind an open card.
   ctx.effect(() => {
     const disposers = [
       ctx.remote.$on('settings/document-updated', (ns: string) => {
-        if (String(ns) === PI_AI_NS) void controller.load('settings')
+        if (String(ns) === PI_AI_NS) void controller.load()
       }),
       ctx.remote.$on('llm/adapters-updated', () => {
-        void controller.load('adapters')
+        void controller.load()
       }),
       ctx.on('connection/reset', () => {
-        void controller.load('reset')
+        void controller.load()
       }),
     ]
     return () => {
@@ -87,7 +78,7 @@ export function apply(ctx: ClientContext): void {
     }
   }, 'model-profile: pushed invalidations')
 
-  // The Models-page enhancer: inject capability controls into each model row.
+  // The Models-page enhancer: seat the provider sync button.
   ctx.effect(() => {
     const handle = bootEnhancer(controller, t)
     return () => {

@@ -1,139 +1,113 @@
 [中文](README.md) · **English**
 
-# dsh-model-profile · Model capability configuration (reasoning levels + capacity)
+# dsh-model-profile · Model capability sync (reasoning levels / image support / capacity)
 
 [![dsh-plugin](https://img.shields.io/badge/topic-dsh--plugin-8A2BE2)](https://github.com/topics/dsh-plugin)
 
-> **This release is built and verified against DSH `0.2.0-rc.2` (and stays compatible with `0.2.0-rc.1`).**
-> The official model row ships its own 输入类型 (text/image) checkboxes since 0.2.0-rc.1, so the plugin no
-> longer injects an **image** control — see “0.2.0-rc.x changes” below. rc.2 changes nothing this plugin
-> touches: the official Models editor bundle (`dsh-client-ui-settings-models`) and the `llm-pi-ai`
-> provider/model schema are byte-identical to rc.1; only the build/verification baseline moved to rc.2.
+> **Since 0.6.0 this plugin does exactly one thing: the 「Sync model capabilities」 button on a provider row.**
+> The official model row now ships its own **reasoning-level** editor (the current DSH build of
+> `dsh-client-ui-settings-models` bundles `readEfforts` / `withEfforts`: one row per offered level with its
+> wire value, validating that every non-`off` level carries a non-empty value) — just like it has shipped its
+> own **input type** (text / image) checkboxes since 0.2.0-rc.1. So the plugin no longer injects a control into
+> any model row, and no longer defends those fields across saves; only the bulk models.dev button remains.
+> The build baseline stays `@deepseek-ai/dsh-*` `0.2.0-rc.2` (peer range `^0.2.0-rc.1`, covering `0.2.x`).
 
-In the **Settings → Models** catalog editor, one control the official editor lacks is added
-**inline on every configured model row**:
+## The only entry point: 「Sync model capabilities」
 
-- **Reasoning level**: Inherit default / No reasoning (`reasoningEfforts: false`) / Custom level
-  (`off` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`, check levels and fill in the API value).
+Every provider row whose model list **you** own gains a **「Sync model capabilities」** button to the left of
+the official 「Edit」 button (it copies that button's class, so it renders at exactly the same size; when a
+React repaint wipes it the observer re-injects it, and repeated sweeps never create a second one). Clicking it
+looks up **every model** of that provider on [models.dev](https://models.dev) by model ID:
 
-The control block header has a **「Preset from models.dev」** button: it looks up the model ID in the open
-[models.dev](https://models.dev) database (automatically strips gateway prefixes and tolerates reasoning-tier
-suffixes like `-high` / `-medium`, with first-party vendor entries taking precedence). On a hit it shows the
-model's reasoning level (the `reasoning_options` enum; `none` → `off` with an empty value) in the controls and
-**stages it — no write yet**; image support (`modalities.input`) is staged the same way, while the capacity
-limits (`limit.context` / `limit.output`) are filled into the official inline "Context window / Max output
-tokens" inputs as before (they ride the official editor's draft). When you save this card, the capacity commits
-with the official draft and the plugin writes the capability fields on the settings update that follows. Not
-saved, not written — the open card's revision snapshot is never bumped out from under its own save. Fields
-models.dev has no opinion about are left untouched.
+| Field | Behavior |
+| --- | --- |
+| Reasoning levels `reasoningEfforts` | Written on a match (the `reasoning_options` enum, `none` → `off` with a `null` wire value) |
+| Image support `input` | Written on a match (`modalities.input` containing `image` → `['text','image']`, otherwise `['text']`) |
+| Context window `contextWindow` / max output `maxTokens` | **Gap-filled only** (`limit.context` / `limit.output`): an existing value is never overwritten |
 
-**Newly added models are auto-preset from models.dev**: rows added via "Fetch available models / Add model"
-show the control block (with a "Not saved yet" banner) and apply the preset even before saving; your manual
-edits are staged just like the preset and written to settings when the editor is saved. Same for "Add custom
-provider" — when the provider doesn't exist yet, fill in `Provider ID` and configure the draft model rows
-directly; they are written once you click "Create provider". Re-entering a Provider ID clears the staged
-selections under the old id; cancel writes nothing. "Add provider" (first-time customization of a catalog
-route) works the same — pick the provider at the top of the card and the draft rows are configurable right
-away; switching the selected provider clears the staged selections under the previous route.
+The button reports progress and outcome in place (「Syncing…」 → 「Synced N fields」); hover for the match
+count, the unlisted model IDs, and any write failures. Models models.dev does not list are left untouched. It
+appears as soon as the row card renders — **no need to expand the model catalog**.
 
-**Capacity (context window / max output tokens) is likewise preset from models.dev**: expanding any model row
-auto-fills empty capacity inputs from models.dev's `limit` — only empty values, endpoint-disclosed or manually
-filled values stay; clearing an input doesn't re-fill it. The "Preset from models.dev" button force-overrides
-capacity with models.dev values as well. Capacity lands through the official editor's own draft (committed with
-save/create); cancel writes nothing.
+**Every write is a one-shot seed**: once a field lands, the official row's own reasoning-level and input-type
+controls are the only authority — the plugin never re-applies a value on a later save or reload, so an edit
+made in the official control always stands.
 
-Changes are written **immediately**, no restart needed; the next request is scheduled with the new capabilities.
+## Model ID matching
 
-**One-click "Sync model capabilities"**: every provider row whose models you own gains a
-"Sync model capabilities" button to the left of the official "Edit" button (same size and style). Clicking it
-looks up **every model** of that provider on models.dev by ID: matched models get their image support
-(`input`) and reasoning levels (`reasoningEfforts`) written directly, while the capacity fields (context
-window / max output) are **filled in only when absent** — existing values are never overwritten. Models
-models.dev does not list are left untouched. The button reports progress and outcome in place
-("Syncing…" → "Synced N fields"); hover for the match count, the unlisted model IDs, and any write failures.
-It appears as soon as the row card renders — **no need to expand the model catalog**.
+Gateway / catalog routes usually prefix a model ID, so prefixes are peeled off before the lookup (every peeled
+form is a candidate, most specific first):
 
-## 0.2.0-rc.x changes
+1. **Namespace prefixes**: both separators are peeled — `/` and `:` — and they nest, so
+   `cn:deepseek-v4.1-flash`, `ag/gemini-3.7-flash-high` and `openrouter/anthropic:claude-x-high` all resolve
+   to `deepseek-v4.1-flash` / `gemini-3.7-flash` / `claude-x`;
+2. **Reasoning-tier suffixes**: one more peel per level — `-high` / `-medium` / `-low` / `-extra-low` /
+   `-thinking` / `-none`;
+3. Same-id **first-party** entries (deepseek / google / openai / zai …) beat aggregator aliases.
 
-The table compares against 0.1.2-alpha.2; `0.2.0-rc.2` changes nothing this plugin depends on (the official
-Models editor client bundle is byte-identical and the `llm-pi-ai` config schema is unchanged — the new
-`dsh-user-questions` remote namespace and the Mistral / mid-convo compat fields are unrelated).
+The raw ID always comes first, so a genuinely prefixed entry in models.dev is never shadowed by the stripped
+form.
 
-| Area | 0.1.2-alpha.2 and earlier | 0.2.0-rc.1 / rc.2 |
+## 0.6.0 changes
+
+| Area | 0.5.0 and earlier | 0.6.0 |
 | --- | --- | --- |
-| Image support (`input`) | Plugin injected an inline select | The **official row ships** 输入类型 (text/image) checkboxes; the plugin injects no duplicate, and only writes the field for "Preset from models.dev" and "Sync model capabilities" |
-| `input` lifetime | Sticky restore like every capability | **Seed once, then forget**: an image choice made in the official control is never reverted |
-| Reasoning levels (`reasoningEfforts`) | Plugin injected | Still no official surface, so the plugin keeps injecting it and keeps the **sticky restore** (nothing official can edit that field) |
-| Per-provider proxy | Plugin wrote `providers.<route>.proxy` | **Removed**: that field exists in neither the 0.2.0-rc.1 nor the rc.2 pi-ai provider schema, and neither the adapter nor pi-ai reads it; proxying is process-wide now, via `dsh-http-proxy` reading `http_proxy` / `https_proxy` / `all_proxy` / `no_proxy` (`$DSH_HOME/.env` or real environment variables) |
-| SDK dependencies | `@deepseek-ai/dsh-*@^0.1.2-alpha.2` | `^0.2.0-rc.1` (covers rc.1, rc.2 and later 0.2.x) plus `@deepseek-ai/cordis@^4.0.4`; the build/test baseline is pinned to `0.2.0-rc.2` (DSH validates every `@deepseek-ai/dsh-*` peer range against its own runtime version, and refuses to start plugins with stale ranges) |
+| Reasoning levels (`reasoningEfforts`) | Plugin injected an inline 「inherit / no reasoning / custom levels」 select plus the seven-level grid | The **official row ships** the reasoning-level editor; the plugin injects no per-model control at all |
+| Per-model 「Preset from models.dev」 button | Present (staged, landed with the official card's save) | **Removed**: per-model editing belongs to the official control, bulk filling to 「Sync model capabilities」 |
+| Capacity auto-fill | Filled empty capacity inputs when a row expanded | **Removed**: capacity is gap-filled only when you click 「Sync model capabilities」 |
+| Write lifetime | `reasoningEfforts` was **sticky-restored** (nothing official could edit it, so the plugin defended it) | **Seed once**: the official control is authoritative, the plugin never restores |
+| Model ID matching | Peelled `/` route prefixes only | Also peels `:` namespace prefixes (`cn:` …), including nested chains |
+| Injected DOM | One control block per model row | One button per provider row |
 
-Configure the proxy in `$DSH_HOME/.env` (or export the variables), for example:
-
-```sh
-HTTPS_PROXY=http://127.0.0.1:7890
-HTTP_PROXY=http://127.0.0.1:7890
-NO_PROXY=localhost,127.0.0.1
-```
-
-Then restart `dsh web`. A leftover `providers.<route>.proxy` field in settings is inert; keeping it is
-harmless, and the plugin no longer reads or writes it.
+Values already stored in settings are **not** touched by this upgrade — the official row simply renders them
+as its initial state.
 
 ## What it solves
 
-Official Models settings rows expose id / display name / context window / max output (plus input types since
-0.2.0-rc.1+) — there is **no** reasoning level entry point, so `reasoningEfforts` could only be hand-written
-into `settings.yaml`. This plugin turns it into an inline control, filling exactly the slot of the model
-catalog editor (each row of custom model catalogs).
+The official model row can edit reasoning levels and input types level by level, but doing that **per model by
+hand** is still tedious, and the level enum, its wire spellings, and the `contextWindow` / `maxTokens` numbers
+are all already published on models.dev. This plugin turns "align one provider in one click" into a button that
+fills exactly those fields of the model catalog editor.
 
 ## How it works
 
 - **Host side**: no behavior (pure browser plugin).
 - **Browser side**:
-  - `controller.ts` reuses the official Models page join (`remote.llm.listConfigurableProviders` + `remote.settings.describe`) and only picks
-    providers under the `llm-pi-ai` namespace whose model lists are held by the **user** layer (lists inherited
-    from the built-in catalog are not materialized on its own).
-  - `enhance.ts` uses a MutationObserver for **language-agnostic structural detection**: rows are identified by
-    their advanced-expand button plus two text inputs, then traced back up the edit-card header (display name /
-    route) to the owning provider.
-  - `controls.ts` injects a control block into every model row; when a React repaint wipes it out, the observer
-    re-injects it and re-syncs from the committed settings (never clobbering elements you are editing).
-  - Writes go through minimal `settings.mutate` path operations: `…models[<i>].reasoningEfforts` (and `…input`
-    for image seeding), touching only the target field; every other field in the model entry (including unknown
-    ones) is preserved, and `expectedRevision` guards against conflicts.
-  - **Two lifetimes**: `reasoningEfforts` is **sticky** — on save, the official editor writes the whole
-    `models` array back from its draft, which can wipe out the level you just set, so the controller remembers
-    your explicit choices for the session and restores them after a reload. `input` is **seed-once** — it is
-    handed to the official checkboxes and never touched again, so the plugin can never revert an image choice
-    made in the official control.
+  - `controller.ts` reuses the official Models page join (`remote.llm.listConfigurableProviders` +
+    `remote.settings.describe`) and only picks providers under the `llm-pi-ai` namespace whose model lists are
+    held by the **user** layer (lists inherited from the built-in catalog are never materialized).
+  - `enhance.ts` uses a MutationObserver for **language-agnostic structural detection**: a provider row is an
+    `<li>` whose first child is the head, and the head carries an official button group (a `<span>` of
+    `button`s). The scan starts from buttons and dedupes by parent, so a sweep costs one pass over the
+    rendered buttons.
+  - `controls.ts` seats the sync button first in that group (left of 「Edit」) and runs the bulk sync.
+  - Writes go through one minimal `settings.mutate` path op: a whole-array `set` of
+    `providers.<route>.models` (the settings path walker cannot descend into arrays — `…models.0.input` would
+    replace the array with an object and fail schema validation), patching only the target field and preserving
+    every other field (including unknown ones), fenced by `expectedRevision`; a `settings/conflict` from a
+    concurrent writer heals itself by reloading the join and retrying once instead of surfacing the raw error.
 
 ## Scope and limitations
 
-- Only affects **`llm-pi-ai`** (gateway / custom providers) — only its schema declares a per-model `input` and
-  `reasoningEfforts`. The `llm-deepseek` official direct catalog supports neither, so nothing is injected.
-- Only enhances **user-customized** model lists (`providers.<route>.models` present in the user layer). For
-  routes that merely inherit from the built-in catalog, declare the models explicitly in the list first, then
-  configure capabilities.
-- Capability fields are written to the user layer settings; the `modelOverrides` form is not handled for now.
-- Writes are serialized per namespace, and a `settings/conflict` (the namespace moved past the write's
-  snapshot) heals itself by reloading the join and retrying once instead of surfacing the raw error. Capability
-  fields set via "Preset from models.dev" land with the card's save and never collide with it; MANUAL reasoning
-  changes still write immediately, and the official editor card snapshots the namespace revision when it opens
-  — after a manual change, saving that card's own edits IMMEDIATELY may still report "settings changed; close
-  and reopen". Save the card's other edits first, or close and reopen the card before saving.
-- Editing image support in the official 输入类型 checkboxes never conflicts with this plugin: the plugin does
-  not overwrite that field.
+- Only affects **`llm-pi-ai`** (gateway / custom providers) — only its schema declares a per-model `input`
+  and `reasoningEfforts`. The `llm-deepseek` direct catalog supports neither, so no button appears.
+- Only enhances **user-customized** model lists (`providers.<route>.models` present in the user layer). For a
+  route that merely inherits the built-in catalog, declare the models explicitly first, then sync.
+- Capacity is gap-filled only; to force models.dev values, clear the input first.
+- Capability fields are written to the user layer; the `modelOverrides` form is not handled yet.
+- Writes are serialized per namespace, and a click only writes fields whose value actually changes (equal
+  values are skipped, so they never consume a revision).
 
 ## Installation
 
-> **Version compatibility**: this release is built and verified against DSH `0.2.0-rc.2`, and its peer
-> range (`@deepseek-ai/dsh-*@^0.2.0-rc.1`, `@deepseek-ai/cordis@^4.0.4`) covers `0.2.0-rc.1`, `0.2.0-rc.2`
-> and later `0.2.x`. Client access goes through the `remote.settings` / `remote.llm` namespaces mounted by
-> `dsh-api-remotes`; `dsh-client-runtime` is gone in favor of `@deepseek-ai/cordis`'s `Context`. DSH
-> validates every `@deepseek-ai/dsh-*` peer range against its runtime version (`dsh plugin list` prints an
-> incompatibility warning and startup refuses non-exempted plugins), so a `0.1.x`-era build **must be
-> reinstalled** on 0.2.0-rc.x — then **restart `dsh web`**. A version-mismatched SDK installed alongside
-> the host breaks session scoping (surfacing as `agent-presets: refusing to compose an unscoped context`
-> when selecting a model).
+> **Version compatibility**: the peer range `@deepseek-ai/dsh-*@^0.2.0-rc.1` + `@deepseek-ai/cordis@^4.0.4`
+> covers `0.2.0-rc.1`, `0.2.0-rc.2` and later `0.2.x`; the build and test baseline is pinned to
+> `0.2.0-rc.2`. Client access goes through the `remote.settings` / `remote.llm` namespaces mounted by
+> `dsh-api-remotes`, and types come from `@deepseek-ai/cordis`'s `Context`. DSH validates every
+> `@deepseek-ai/dsh-*` peer range against its runtime version (`dsh plugin list` prints an incompatibility
+> warning and startup refuses non-exempted plugins), so a `0.1.x`-era build **must be reinstalled** on
+> `0.2.x` — then **restart `dsh web`**. A version-mismatched SDK installed alongside the host breaks session
+> scoping (surfacing as `agent-presets: refusing to compose an unscoped context` when selecting a model).
 
 From npm:
 
@@ -153,9 +127,8 @@ For example:
 dsh plugin --profile web add link:D:\Desktop\dsh-model-profile
 ```
 
-Then restart `dsh web`, open **Settings → Models**, expand any custom provider and open a model's advanced
-settings — the "Model capabilities" control block appears inline on that model row (image support uses the
-official 输入类型 checkboxes in the same region).
+Then restart `dsh web`, open **Settings → Models**: the **「Sync model capabilities」** button appears to the
+left of 「Edit」 on every custom provider row.
 
 ## Uninstall
 
@@ -166,19 +139,19 @@ dsh plugin --profile web remove @ztlovelsw/dsh-model-profile
 ## Development
 
 ```sh
-pnpm install        # or link the SDK dependencies per dsh-web-ui conventions
+pnpm install
 pnpm run build      # tsc -b (type declarations) + tsdown (host/client bundles)
-pnpm test           # vitest pure-logic unit tests
+pnpm test           # vitest unit tests
 ```
 
 Structure:
 
 - `src/index.ts` — host half entry (no behavior).
 - `src/client/index.ts` — browser half assembly (dictionary, invalidation refresh, enhancer bootstrap).
-- `src/client/controller.ts` — providers/models join, write-back, capability lifetimes.
-- `src/client/enhance.ts` — MutationObserver structural detection + injection coordination.
-- `src/client/controls.ts` — injected block DOM, events, sync, and the bulk-sync button.
-- `src/client/core.ts` — reasoning-level pure logic (unit-testable).
+- `src/client/controller.ts` — providers/models join and revision-fenced writes.
+- `src/client/enhance.ts` — MutationObserver structural detection + sweep scheduling.
+- `src/client/controls.ts` — the sync button's injection and the bulk sync.
+- `src/client/presets.ts` — models.dev fetch, index, model-ID matching (`cn:` prefixes) and field mapping.
 - `src/client/locales.ts` — Chinese & English copy.
-- `src/client/enhance.module.css` — injected block styles (follows the shell design tokens).
+- `src/client/enhance.module.css` — fallback button styles (follows the shell design tokens).
 - `cordis.patch.yml` — bundle patch plugin line (id `ui-model-profile`).

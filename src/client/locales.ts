@@ -1,35 +1,12 @@
 /**
- * `model-profile` namespace dictionaries: copy for the capability controls
- * injected into the official Models settings editor's per-model rows.
+ * `model-profile` namespace dictionaries: copy for the provider-level
+ * 「同步模型能力」 button injected into the official Models settings page.
  */
 
 /** Simplified Chinese dictionary (the key-set source of truth). */
 export const zh = {
-  'block.title': '模型能力',
-  'reasoning': '思考等级',
-  'reasoning.inherit': '继承默认',
-  'reasoning.off': '不支持思考',
-  'reasoning.custom': '自定义等级',
-  'reasoning.hint': '不支持思考 = reasoningEfforts: false；自定义 = 按等级声明发送给接口的取值。',
-  'reasoning.customHint': '勾选该模型提供的思考等级并填写接口取值（默认与等级同名）；off 的取值可留空，表示不发送任何参数。',
-  'reasoning.invalid': '至少勾选一个非 off 的等级，且非 off 等级必须填写接口取值。',
-  'effort.off': 'off（不思考）',
-  'effort.minimal': 'minimal（极低）',
-  'effort.low': 'low（低）',
-  'effort.medium': 'medium（中）',
-  'effort.high': 'high（高）',
-  'effort.xhigh': 'xhigh（极高）',
-  'effort.max': 'max（最高）',
-  'effort.wire': '接口取值',
-  'write.failed': '写入失败：{error}',
-  'preset': '按 models.dev 预设',
-  'preset.hint': '按模型 ID 查询 models.dev：思考等级显示在控件里并暂存，图像支持与容量随官方卡片保存写入。',
-  'preset.none': 'models.dev 未收录该模型（按模型 ID 匹配），未做更改。',
-  'preset.fetchFailed': '获取 models.dev 数据失败：{error}',
-  'pending.hint': '该模型尚未保存：以上选择会先暂存，待模型保存后自动写入。',
-  'staged.hint': '预设已暂存：点击本卡的保存后写入。',
   'sync': '同步模型能力',
-  'sync.hint': '按 models.dev 批量同步当前提供方所有模型的能力：思考等级直接写入，图像支持一并写入（之后以官方行内勾选框为准），上下文窗口/最大输出仅在未填写时补全。',
+  'sync.hint': '按 models.dev 批量同步当前提供方所有模型的能力：思考等级与图像支持直接写入（之后以官方行内的推理等级与输入类型控件为准），上下文窗口/最大输出仅在未填写时补全。',
   'sync.busy': '同步中…',
   'sync.applied': '已同步 {n} 项',
   'sync.none': '该提供方还没有模型，无需同步。',
@@ -45,31 +22,8 @@ export type ModelProfileKey = keyof typeof zh
 
 /** English dictionary, checked complete against the zh key set. */
 export const en: Record<ModelProfileKey, string> = {
-  'block.title': 'Model capabilities',
-  'reasoning': 'Reasoning levels',
-  'reasoning.inherit': 'Inherit',
-  'reasoning.off': 'No reasoning',
-  'reasoning.custom': 'Custom levels',
-  'reasoning.hint': 'No reasoning = reasoningEfforts: false; custom declares the wire value sent per level.',
-  'reasoning.customHint': 'Check the reasoning levels this model offers and fill in the wire value sent to the endpoint (defaults to the level id). The off value may be left empty to send nothing.',
-  'reasoning.invalid': 'Check at least one non-off level, and every non-off level needs a wire value.',
-  'effort.off': 'off',
-  'effort.minimal': 'minimal',
-  'effort.low': 'low',
-  'effort.medium': 'medium',
-  'effort.high': 'high',
-  'effort.xhigh': 'xhigh',
-  'effort.max': 'max',
-  'effort.wire': 'Wire value',
-  'write.failed': 'Write failed: {error}',
-  'preset': 'Preset from models.dev',
-  'preset.hint': 'Looks the model up on models.dev by id: reasoning levels show in the controls and are staged; image support and capacity land with this card\'s save.',
-  'preset.none': 'models.dev has no entry for this model (matched by model id); nothing changed.',
-  'preset.fetchFailed': 'Failed to fetch models.dev data: {error}',
-  'pending.hint': 'This model is not saved yet: choices are staged and written automatically once it is saved.',
-  'staged.hint': 'Preset staged: written when you save this card.',
   'sync': 'Sync model capabilities',
-  'sync.hint': 'Bulk-sync every model of this provider from models.dev: reasoning levels are written directly, image support is seeded too (the official row checkboxes own it afterwards), and context window / max output are filled in only when absent.',
+  'sync.hint': 'Bulk-sync every model of this provider from models.dev: reasoning levels and image support are written directly (the official row\'s reasoning-level and input-type controls own them afterwards), and context window / max output are filled in only when absent.',
   'sync.busy': 'Syncing…',
   'sync.applied': 'Synced {n} fields',
   'sync.none': 'This provider has no models to sync.',
