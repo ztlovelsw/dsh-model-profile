@@ -1,7 +1,7 @@
 {
   "name": "@ztlovelsw/dsh-model-profile",
   "version": "0.6.0",
-  "description": "DSH Web GUI 模型能力同步：在「设置 → 模型」的提供方行上提供「同步模型能力」按钮，按 models.dev 批量写入推理等级（reasoning efforts）、图像支持与（空缺的）上下文容量，写入 llm-pi-ai 设置命名空间。",
+  "description": "DSH Web GUI 模型能力同步与提供方请求头高级设置：按 models.dev 批量补全模型能力，并按 provider route 配置自定义请求头与 Codex/Claude 模板。",
   "type": "module",
   "packageManager": "pnpm@11.7.0",
   "repository": {
@@ -17,7 +17,10 @@
     "dsh-plugin",
     "dsh-web",
     "model-profile",
-    "reasoning-efforts"
+    "reasoning-efforts",
+    "request-headers",
+    "codex",
+    "claude"
   ],
   "publishConfig": {
     "access": "public",
@@ -89,5 +92,8 @@
     "tsdown": "^0.22.2",
     "typescript": "^5.9.3",
     "vitest": "^4.1.1"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "3.18.4"
   }
 }

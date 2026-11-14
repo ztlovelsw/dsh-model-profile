@@ -1,15 +1,15 @@
 **中文** · [English](README.en.md)
 
-# dsh-model-profile · 模型能力同步（思考等级 / 图像支持 / 上下文容量）
+# dsh-model-profile · 模型能力同步与请求头高级设置
 
 [![dsh-plugin](https://img.shields.io/badge/topic-dsh--plugin-8A2BE2)](https://github.com/topics/dsh-plugin)
 
-> **0.6.0 起本插件只做一件事：提供方行上的「同步模型能力」按钮。**
+> **插件在提供方行上提供「同步模型能力」和「高级设置」两个入口。**
 > 官方模型行现在自带**推理等级**编辑（当前 DSH 的 `dsh-client-ui-settings-models` 已内置
 > `readEfforts` / `withEfforts`：逐档勾选 + 接口取值，并对非 `off` 档校验取值非空），
 > 与 0.2.0-rc.1 起自带的**输入类型（文本 / 图像）**勾选框一样，已经不需要插件代劳。
-> 因此插件不再往任何模型行注入控件、也不再跨保存「守护」这些字段，只保留按
-> [models.dev](https://models.dev) 批量补全的按钮。
+> 因此插件不再往任何模型行注入控件、也不再跨保存「守护」这些字段；模型能力继续由
+> [models.dev](https://models.dev) 批量补全，请求头则由每个提供方单独控制。
 > 构建基线仍是 `@deepseek-ai/dsh-*` `0.2.0-rc.2`（peer 范围 `^0.2.0-rc.1`，覆盖 `0.2.x`）。
 
 ## 唯一入口：「同步模型能力」
@@ -30,6 +30,22 @@ models.dev：
 
 **写入是一次性落地**：字段写进去之后，官方行内的「推理等级 / 输入类型」控件就是唯一权威——插件不会
 在后续保存或刷新中把值改回去，你在官方控件里的修改永远生效。
+
+## 提供方「高级设置」：自定义请求头
+
+每个 `llm-pi-ai` 提供方行都会出现「高级设置」。打开后可以：
+
+- 勾选启用或关闭该提供方的自定义请求头；关闭只停止附加这些头，不修改 `llm-pi-ai` 原配置；
+- 用 JSON 对象编辑任意 `Header: string`，保存后只影响新的推理请求；
+- 一键填入 **Codex 请求模板** 或 **Claude 请求模板**，再按网关需要继续编辑后保存。
+
+Codex 模板来自 [codex-proxy-rs](https://github.com/zyycn/codex-proxy-rs) 的公开客户端身份约定，默认填入
+`originator: codex_cli_rs`；Claude 模板填入 `anthropic-version: 2023-06-01`。认证、`User-Agent` 和会话头
+仍由 DSH/pi-ai 负责，模板不会伪造 API Key 或覆盖 DSH 的 `User-Agent`。
+
+配置保存于插件自己的 `ui-model-profile` 命名空间，按 provider route 隔离。宿主通过
+`llm-pi-ai/request-headers` 的请求级 waterfall 注入请求头；插件卸载后监听器由 Cordis 自动解除，不修改
+安装目录里的 DSH 文件，也不使用进程级 `fetch` 补丁。
 
 ## 模型 ID 匹配规则
 
@@ -64,7 +80,8 @@ models.dev：
 
 ## 工作原理
 
-- **宿主端**：无行为（纯浏览器插件）。
+- **宿主端**：注册请求级 `llm-pi-ai/request-headers` 监听器，按 provider route 读取插件配置并附加请求头；
+  配置关闭或插件卸载后不再附加。
 - **浏览器端**：
   - `controller.ts` 复用官方 Models 页的 join（`remote.llm.listConfigurableProviders` +
     `remote.settings.describe`），只挑出 `llm-pi-ai` 命名空间下、模型列表由**用户层**持有的提供方
@@ -72,7 +89,8 @@ models.dev：
   - `enhance.ts` 用 MutationObserver 做**与语言无关的结构探测**：提供方行 = `<li>`，其首个子元素为
     行头，行头里带一组官方按钮（`<span>` 内全是 `button`）。扫描从按钮出发、按父元素去重，
     每次扫描只过一遍已渲染按钮。
-  - `controls.ts` 在该按钮组首位（「编辑」左边）坐上同步按钮，并执行批量同步。
+  - `header-controller.ts` 读取 `ui-model-profile` 命名空间，按 provider route 保存请求头配置；
+  - `controls.ts` 在该按钮组中加入「高级设置」和「同步模型能力」，前者提供 Header JSON、启用开关和两个模板。
   - 写入走最小 `settings.mutate` 路径操作：`providers.<route>.models` 整段 `set`（设置服务的路径
     解析器无法下钻数组，`…models.0.input` 会把数组换成对象而校验失败），只补目标字段、其余字段
     （含未知字段）原样保留，并带 `expectedRevision` 防冲突；遇到并发写入导致的
@@ -80,8 +98,8 @@ models.dev：
 
 ## 作用范围与限制
 
-- 只对 **`llm-pi-ai`**（网关 / 自定义提供方）生效——只有它的 schema 声明了每模型 `input` 与
-  `reasoningEfforts`。`llm-deepseek` 官方直连的模型目录不支持这两项，故不出按钮。
+- 模型能力同步只对 **`llm-pi-ai`**（网关 / 自定义提供方）生效——只有它的 schema 声明了每模型 `input` 与
+  `reasoningEfforts`。请求头高级设置同样按 `llm-pi-ai` 的 provider route 展示。
 - 只增强**用户已自定义**的模型列表（`providers.<route>.models` 在用户层存在）。仅继承内置目录的
   路由请先在模型列表里显式声明模型，再点同步。
 - 容量只补空值；想强制覆盖就清空那个输入框再同步。
@@ -117,8 +135,8 @@ dsh plugin --profile web add link:<本目录绝对路径>
 dsh plugin --profile web add link:D:\Desktop\dsh-model-profile
 ```
 
-然后重启 `dsh web`，打开「设置 → 模型」，任一自定义提供方行的「编辑」左侧即出现
-**「同步模型能力」**按钮。
+然后重启 `dsh web`，打开「设置 → 模型」，提供方行的「编辑」左侧即出现
+**「高级设置」**；拥有用户模型列表的自定义提供方还会出现**「同步模型能力」**按钮。
 
 ## 卸载
 
@@ -136,11 +154,13 @@ pnpm test           # vitest 单测
 
 结构：
 
-- `src/index.ts` — host 半区入口（无行为）。
+- `src/index.ts` — host 半区入口（请求头配置 schema 与 `llm-pi-ai/request-headers` 钩子）。
 - `src/client/index.ts` — browser 半区装配（字典、失效刷新、增强器启动）。
 - `src/client/controller.ts` — providers/models join 与 revision 围栏写入。
+- `src/client/header-controller.ts` — provider 请求头配置读取、保存与 revision 围栏写入。
 - `src/client/enhance.ts` — MutationObserver 结构探测 + 扫描调度。
 - `src/client/controls.ts` — 同步按钮的注入与批量同步。
+- `src/header-config.ts` — 请求头命名空间与 Codex/Claude 模板。
 - `src/client/presets.ts` — models.dev 拉取、索引与模型 ID 匹配（`cn:` 等前缀）、字段换算。
 - `src/client/locales.ts` — 中英文案。
 - `src/client/enhance.module.css` — 按钮兜底样式（跟随外壳设计令牌）。

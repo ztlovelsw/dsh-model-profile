@@ -18,10 +18,12 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-connection/client'
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import { ModelCapabilityController } from './controller.ts'
+import { RequestHeaderController } from './header-controller.ts'
 import { bootEnhancer } from './enhance.ts'
 import { en, zh, type ModelProfileKey } from './locales.ts'
 
 export type { CapabilityProvider, ModelCapabilityController } from './controller.ts'
+export type { HeaderProvider, RequestHeaderController } from './header-controller.ts'
 export type { EnhancerHandle, Translator } from './enhance.ts'
 export type { ModelProfileKey } from './locales.ts'
 
@@ -58,19 +60,24 @@ export function apply(ctx: ClientContext): void {
   // / `remote.llm`) that `dsh-api-remotes` mounts — the same wire the official
   // Models page uses. DSH 0.1.2-alpha.2 removed the old `connection.api`/IApiClient.
   const controller = new ModelCapabilityController(ctx.remote.settings, ctx.remote.llm)
+  const headerController = new RequestHeaderController(ctx.remote.settings, ctx.remote.llm)
   void controller.load()
+  void headerController.load()
 
   // Keep the join fresh: settings-document and provider-topology changes.
   ctx.effect(() => {
     const disposers = [
       ctx.remote.$on('settings/document-updated', (ns: string) => {
         if (String(ns) === PI_AI_NS) void controller.load()
+        if (String(ns) === 'ui-model-profile') void headerController.load()
       }),
       ctx.remote.$on('llm/adapters-updated', () => {
         void controller.load()
+        void headerController.load()
       }),
       ctx.on('connection/reset', () => {
         void controller.load()
+        void headerController.load()
       }),
     ]
     return () => {
@@ -80,7 +87,7 @@ export function apply(ctx: ClientContext): void {
 
   // The Models-page enhancer: seat the provider sync button.
   ctx.effect(() => {
-    const handle = bootEnhancer(controller, t)
+    const handle = bootEnhancer(controller, headerController, t)
     return () => {
       handle.stop()
     }

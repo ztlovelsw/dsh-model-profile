@@ -1,8 +1,8 @@
 /**
- * The provider-level 「同步模型能力」 button: one plain-DOM button seated in the
- * action group of each official provider row (i.e. immediately before 编辑),
- * plus the bulk sync it runs. Plain DOM because the official page is
- * React-owned — the enhancer re-injects the button whenever React wipes it.
+ * Provider-level actions seated in the action group of each official provider
+ * row: the custom request-header editor and the models.dev capability sync.
+ * Plain DOM because the official page is React-owned — the enhancer re-injects
+ * them whenever React wipes the row.
  *
  * Nothing per-model lives here any more: the official model row owns its own
  * 输入类型 (text/image) checkboxes and its reasoning-level editor, so the plugin
@@ -11,6 +11,8 @@
 
 import type { ModelCapabilityController, CapabilityProvider } from './controller.ts'
 import { messageOf } from './controller.ts'
+import type { HeaderProvider, RequestHeaderController } from './header-controller.ts'
+import { cloneHeaderPreset, type HeaderPresetId } from '../header-config.ts'
 import type { Translator } from './enhance.ts'
 import { fetchModelsDevIndex, findModel, presetOf } from './presets.ts'
 import css from './enhance.module.css'
@@ -26,7 +28,7 @@ const syncBusy = new WeakMap<HTMLElement, boolean>()
  * @param controller - the loaded provider/model join.
  * @param t - the plugin's translator.
  */
-export function sweepRowSyncButtons(controller: ModelCapabilityController, t: Translator): void {
+export function sweepRowControls(controller: ModelCapabilityController, headerController: RequestHeaderController | undefined, t: Translator): void {
   if (!controller.loaded) return
   const seen = new Set<HTMLElement>()
   for (const button of Array.from(document.querySelectorAll('button'))) {
@@ -42,9 +44,18 @@ export function sweepRowSyncButtons(controller: ModelCapabilityController, t: Tr
     const card = head.parentElement
     if (!(card instanceof HTMLLIElement) || card.firstElementChild !== head) continue
     const provider = providerFromHead(controller, head, group)
-    if (provider === undefined) continue
-    ensureRowSyncButton(group, provider, controller, t)
+    const headerProvider = headerProviderFromHead(headerController, head, group)
+    if (provider === undefined && headerProvider === undefined) continue
+    if (provider !== undefined) ensureRowSyncButton(group, provider, controller, t)
+    if (headerController?.loaded === true && headerProvider !== undefined) {
+      ensureRowHeaderButton(group, headerProvider, headerController, t)
+    }
   }
+}
+
+/** Backwards-compatible capability-only scan for existing consumers. */
+export function sweepRowSyncButtons(controller: ModelCapabilityController, t: Translator): void {
+  sweepRowControls(controller, undefined, t)
 }
 
 /**
@@ -59,6 +70,23 @@ export function sweepRowSyncButtons(controller: ModelCapabilityController, t: Tr
  * @returns the editable provider, or undefined when the head names none.
  */
 function providerFromHead(controller: ModelCapabilityController, head: HTMLElement, group: HTMLElement): CapabilityProvider | undefined {
+  for (const text of providerTextsFromHead(head, group)) {
+    const provider = controller.findProvider(text)
+    if (provider !== undefined) return provider
+  }
+  return undefined
+}
+
+function headerProviderFromHead(controller: RequestHeaderController | undefined, head: HTMLElement, group: HTMLElement): HeaderProvider | undefined {
+  if (controller === undefined) return undefined
+  for (const text of providerTextsFromHead(head, group)) {
+    const provider = controller.findProvider(text)
+    if (provider !== undefined) return provider
+  }
+  return undefined
+}
+
+function providerTextsFromHead(head: HTMLElement, group: HTMLElement): string[] {
   const texts: string[] = []
   for (const child of Array.from(head.children)) {
     if (!(child instanceof HTMLElement) || child === group) continue
@@ -68,12 +96,7 @@ function providerFromHead(controller: ModelCapabilityController, head: HTMLEleme
     }
   }
   texts.sort((left, right) => left.length - right.length)
-  for (const text of texts) {
-    if (text.length === 0 || text.length > 64) continue
-    const provider = controller.findProvider(text)
-    if (provider !== undefined) return provider
-  }
-  return undefined
+  return texts.filter((text) => text.length > 0 && text.length <= 64)
 }
 
 /**
@@ -101,6 +124,138 @@ function ensureRowSyncButton(group: HTMLElement, provider: CapabilityProvider, c
     void runSync(provider, button, controller, t)
   })
   group.insertBefore(button, group.firstElementChild)
+}
+
+function ensureRowHeaderButton(group: HTMLElement, provider: HeaderProvider, controller: RequestHeaderController, t: Translator): void {
+  if (group.querySelector('[data-mp-headers-button]') !== null) {
+    ensureHeaderPanel(group, provider, controller, t)
+    return
+  }
+  const template = group.querySelector('button')
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.setAttribute('data-mp-headers-button', '')
+  button.setAttribute('data-mp-provider', provider.provider)
+  button.textContent = t('headers')
+  button.title = t('headers.hint')
+  button.className = template instanceof HTMLButtonElement && template.className.length > 0 ? template.className : css.presetBtn
+  button.addEventListener('click', () => {
+    const panel = panelFor(group)
+    if (panel !== undefined) panel.open = !panel.open
+  })
+  // Keep the existing sync action first, then place the advanced action before
+  // the official edit/delete buttons.
+  group.insertBefore(button, group.children[1] ?? null)
+  ensureHeaderPanel(group, provider, controller, t)
+}
+
+function panelFor(group: HTMLElement): HTMLDetailsElement | undefined {
+  const card = group.parentElement?.parentElement
+  if (!(card instanceof HTMLElement)) return undefined
+  return Array.from(card.children).find((child) => child instanceof HTMLDetailsElement && child.hasAttribute('data-mp-headers')) as HTMLDetailsElement | undefined
+}
+
+function ensureHeaderPanel(group: HTMLElement, provider: HeaderProvider, controller: RequestHeaderController, t: Translator): void {
+  const card = group.parentElement?.parentElement
+  if (!(card instanceof HTMLElement) || panelFor(group) !== undefined) return
+  const details = document.createElement('details')
+  details.setAttribute('data-mp-headers', '')
+  details.className = css.headerPanel
+  const summary = document.createElement('summary')
+  summary.textContent = t('headers.title')
+  details.append(summary)
+
+  const body = document.createElement('div')
+  body.className = css.headerBody
+  const enabledLabel = document.createElement('label')
+  enabledLabel.className = css.headerEnabled
+  const enabled = document.createElement('input')
+  enabled.type = 'checkbox'
+  enabled.checked = provider.profile.enabled
+  enabledLabel.append(enabled, document.createTextNode(t('headers.enabled')))
+  body.append(enabledLabel)
+
+  const help = document.createElement('div')
+  help.className = css.headerHelp
+  help.textContent = t('headers.help')
+  body.append(help)
+
+  const textarea = document.createElement('textarea')
+  textarea.className = css.headerInput
+  textarea.spellcheck = false
+  textarea.value = JSON.stringify(provider.profile.headers, null, 2)
+  textarea.setAttribute('aria-label', t('headers.input'))
+  body.append(textarea)
+
+  const status = document.createElement('span')
+  status.className = css.headerStatus
+
+  const presets = document.createElement('div')
+  presets.className = css.headerPresets
+  for (const [id, label] of [['codex', t('headers.codex')], ['claude', t('headers.claude')]] as [HeaderPresetId, string][]) {
+    const preset = document.createElement('button')
+    preset.type = 'button'
+    preset.className = css.presetBtn
+    preset.textContent = label
+    preset.addEventListener('click', () => {
+      textarea.value = JSON.stringify(cloneHeaderPreset(id), null, 2)
+      enabled.checked = true
+      status.textContent = t('headers.presetLoaded')
+    })
+    presets.append(preset)
+  }
+  body.append(presets)
+
+  const footer = document.createElement('div')
+  footer.className = css.headerFooter
+  const save = document.createElement('button')
+  save.type = 'button'
+  save.className = css.presetBtn
+  save.textContent = t('headers.save')
+  save.addEventListener('click', () => {
+    void saveHeaders(provider, controller, enabled, textarea, save, status, t)
+  })
+  footer.append(save, status)
+  body.append(footer)
+  details.append(body)
+  card.append(details)
+}
+
+async function saveHeaders(
+  provider: HeaderProvider,
+  controller: RequestHeaderController,
+  enabled: HTMLInputElement,
+  textarea: HTMLTextAreaElement,
+  save: HTMLButtonElement,
+  status: HTMLElement,
+  t: Translator,
+): Promise<void> {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(textarea.value)
+  } catch {
+    status.textContent = t('headers.invalidJson')
+    return
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed) || Object.values(parsed).some((value) => typeof value !== 'string')) {
+    status.textContent = t('headers.invalidShape')
+    return
+  }
+  try {
+    const checked = new Headers()
+    for (const [name, value] of Object.entries(parsed)) checked.set(name, value)
+  } catch {
+    status.textContent = t('headers.invalidShape')
+    return
+  }
+  save.disabled = true
+  status.textContent = t('headers.saving')
+  try {
+    const failure = await controller.save(provider, { enabled: enabled.checked, headers: parsed as Record<string, string> })
+    status.textContent = failure === undefined ? t('headers.saved') : t('headers.failed', { error: failure })
+  } finally {
+    save.disabled = false
+  }
 }
 
 /**

@@ -1,9 +1,9 @@
 /**
- * DOM enhancer: seats the provider-level 「同步模型能力」 button inside the
- * action group of each official Models-page provider row (the span carrying the
- * official 编辑 / 删除 buttons). The official editor declares no extension slot,
- * so the enhancer watches the document and detects those groups structurally
- * (locale-independent) instead of by hashed class names.
+ * DOM enhancer: seats provider-level actions inside the action group of each
+ * official Models-page provider row (the span carrying the official 编辑 / 删除
+ * buttons). The official editor declares no extension slot, so the enhancer
+ * watches the document and detects those groups structurally (locale-independent)
+ * instead of by hashed class names.
  *
  * Nothing is injected into the model rows themselves: the official row now owns
  * its 输入类型 (text/image) checkboxes AND its reasoning-level editor, so a
@@ -15,8 +15,9 @@
  */
 
 import type { ModelCapabilityController } from './controller.ts'
+import type { RequestHeaderController } from './header-controller.ts'
 import type { ModelProfileKey } from './locales.ts'
-import { sweepRowSyncButtons } from './controls.ts'
+import { sweepRowControls } from './controls.ts'
 
 /** Translate one dictionary key with optional `{name}` template params. */
 export type Translator = (key: ModelProfileKey, params?: Record<string, unknown>) => string
@@ -33,16 +34,16 @@ export interface EnhancerHandle {
  * @param controller - the loaded provider/model join.
  * @param t - the plugin's translator.
  */
-export function sweepOnce(controller: ModelCapabilityController, t: Translator): void {
+export function sweepOnce(controller: ModelCapabilityController, t: Translator, headerController?: RequestHeaderController): void {
   if (!controller.loaded) return
   // The provider-row sync button lives on the row HEAD, which is rendered for
   // every provider regardless of the model catalog's expanded state — so a page
   // whose rows are all collapsed still gets the button.
-  sweepRowSyncButtons(controller, t)
+  sweepRowControls(controller, headerController, t)
 }
 
 /** Start the enhancer: mutation-driven sweeps plus a low-frequency fallback. */
-export function bootEnhancer(controller: ModelCapabilityController, t: Translator): EnhancerHandle {
+export function bootEnhancer(controller: ModelCapabilityController, headerController: RequestHeaderController, t: Translator): EnhancerHandle {
   let scheduled = false
   let stopped = false
 
@@ -51,7 +52,7 @@ export function bootEnhancer(controller: ModelCapabilityController, t: Translato
     scheduled = true
     requestAnimationFrame(() => {
       scheduled = false
-      if (!stopped) sweepOnce(controller, t)
+      if (!stopped) sweepOnce(controller, t, headerController)
     })
   }
 

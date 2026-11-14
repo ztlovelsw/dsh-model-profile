@@ -1,7 +1,6 @@
-/* The only injected element left: the provider-row 「同步模型能力」 button. Its
-   class is a FALLBACK — a row whose neighbouring official button carries a
-   class copies that class instead — so these rules only style the degenerate
-   case, following the shell's design tokens. */
+/* Fallback styles for the injected provider actions and header editor. The
+   provider row copies an official button class whenever one is available, so
+   these rules mainly cover the degenerate case. */
 
 .presetBtn {
   font: inherit;
@@ -23,4 +22,50 @@
 .presetBtn:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+.headerPanel {
+  margin-top: 8px;
+  padding: 0 12px 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+}
+
+.headerPanel summary {
+  padding: 10px 0;
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+}
+
+.headerBody {
+  display: grid;
+  gap: 8px;
+}
+
+.headerEnabled,
+.headerFooter,
+.headerPresets {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.headerHelp,
+.headerStatus {
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+}
+
+.headerInput {
+  width: 100%;
+  min-height: 120px;
+  box-sizing: border-box;
+  padding: 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-layer-2);
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+  resize: vertical;
 }

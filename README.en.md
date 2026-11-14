@@ -1,15 +1,16 @@
 [中文](README.md) · **English**
 
-# dsh-model-profile · Model capability sync (reasoning levels / image support / capacity)
+# dsh-model-profile · Model capability sync and request-header settings
 
 [![dsh-plugin](https://img.shields.io/badge/topic-dsh--plugin-8A2BE2)](https://github.com/topics/dsh-plugin)
 
-> **Since 0.6.0 this plugin does exactly one thing: the 「Sync model capabilities」 button on a provider row.**
+> **The plugin provides two provider-row actions: 「Sync model capabilities」 and 「Advanced settings」.**
 > The official model row now ships its own **reasoning-level** editor (the current DSH build of
 > `dsh-client-ui-settings-models` bundles `readEfforts` / `withEfforts`: one row per offered level with its
 > wire value, validating that every non-`off` level carries a non-empty value) — just like it has shipped its
 > own **input type** (text / image) checkboxes since 0.2.0-rc.1. So the plugin no longer injects a control into
-> any model row, and no longer defends those fields across saves; only the bulk models.dev button remains.
+> any model row, and no longer defends those fields across saves; models.dev still supplies the bulk capability
+> sync, while request headers are configured per provider.
 > The build baseline stays `@deepseek-ai/dsh-*` `0.2.0-rc.2` (peer range `^0.2.0-rc.1`, covering `0.2.x`).
 
 ## The only entry point: 「Sync model capabilities」
@@ -32,6 +33,24 @@ appears as soon as the row card renders — **no need to expand the model catalo
 **Every write is a one-shot seed**: once a field lands, the official row's own reasoning-level and input-type
 controls are the only authority — the plugin never re-applies a value on a later save or reload, so an edit
 made in the official control always stands.
+
+## Provider advanced settings: custom request headers
+
+Every `llm-pi-ai` provider row also has 「Advanced settings」. It provides:
+
+- an enable switch for that provider's custom headers; disabling it stops adding headers without changing the
+  original `llm-pi-ai` profile;
+- a JSON editor for arbitrary `Header: string` values, applied to new inference requests after saving;
+- editable **Codex** and **Claude** header templates.
+
+The Codex template follows the public client identity vocabulary documented by
+[codex-proxy-rs](https://github.com/zyycn/codex-proxy-rs) and starts with `originator: codex_cli_rs`. The Claude
+template starts with `anthropic-version: 2023-06-01`. Authentication, `User-Agent`, and session headers remain
+owned by DSH/pi-ai, so the templates do not fabricate an API key or override DSH's `User-Agent`.
+
+The settings live in this plugin's `ui-model-profile` namespace and are isolated by provider route. The host uses
+the request-level `llm-pi-ai/request-headers` waterfall; Cordis removes the listener when the plugin unloads. No
+DSH installation files or process-wide `fetch` patch are modified.
 
 ## Model ID matching
 
@@ -71,7 +90,8 @@ fills exactly those fields of the model catalog editor.
 
 ## How it works
 
-- **Host side**: no behavior (pure browser plugin).
+- **Host side**: registers the request-level `llm-pi-ai/request-headers` listener, reads the plugin config by
+  provider route, and adds the configured headers while enabled.
 - **Browser side**:
   - `controller.ts` reuses the official Models page join (`remote.llm.listConfigurableProviders` +
     `remote.settings.describe`) and only picks providers under the `llm-pi-ai` namespace whose model lists are
@@ -80,7 +100,9 @@ fills exactly those fields of the model catalog editor.
     `<li>` whose first child is the head, and the head carries an official button group (a `<span>` of
     `button`s). The scan starts from buttons and dedupes by parent, so a sweep costs one pass over the
     rendered buttons.
-  - `controls.ts` seats the sync button first in that group (left of 「Edit」) and runs the bulk sync.
+  - `header-controller.ts` reads and revision-fences the `ui-model-profile` request-header namespace;
+  - `controls.ts` adds the 「Advanced settings」 and 「Sync model capabilities」 actions, with the JSON editor,
+    enable switch, and two templates.
   - Writes go through one minimal `settings.mutate` path op: a whole-array `set` of
     `providers.<route>.models` (the settings path walker cannot descend into arrays — `…models.0.input` would
     replace the array with an object and fail schema validation), patching only the target field and preserving
@@ -89,8 +111,8 @@ fills exactly those fields of the model catalog editor.
 
 ## Scope and limitations
 
-- Only affects **`llm-pi-ai`** (gateway / custom providers) — only its schema declares a per-model `input`
-  and `reasoningEfforts`. The `llm-deepseek` direct catalog supports neither, so no button appears.
+- Capability sync affects **`llm-pi-ai`** (gateway / custom providers) because its schema declares per-model
+  `input` and `reasoningEfforts`; request-header settings are also shown per `llm-pi-ai` provider route.
 - Only enhances **user-customized** model lists (`providers.<route>.models` present in the user layer). For a
   route that merely inherits the built-in catalog, declare the models explicitly first, then sync.
 - Capacity is gap-filled only; to force models.dev values, clear the input first.
@@ -127,8 +149,8 @@ For example:
 dsh plugin --profile web add link:D:\Desktop\dsh-model-profile
 ```
 
-Then restart `dsh web`, open **Settings → Models**: the **「Sync model capabilities」** button appears to the
-left of 「Edit」 on every custom provider row.
+Then restart `dsh web`, open **Settings → Models**: every provider row has **「Advanced settings」** to the left
+of 「Edit」, and custom providers whose model lists are user-owned also have **「Sync model capabilities」**.
 
 ## Uninstall
 
@@ -146,11 +168,13 @@ pnpm test           # vitest unit tests
 
 Structure:
 
-- `src/index.ts` — host half entry (no behavior).
+- `src/index.ts` — host half entry (request-header schema and `llm-pi-ai/request-headers` hook).
 - `src/client/index.ts` — browser half assembly (dictionary, invalidation refresh, enhancer bootstrap).
 - `src/client/controller.ts` — providers/models join and revision-fenced writes.
+- `src/client/header-controller.ts` — provider request-header reads, saves, and revision fencing.
 - `src/client/enhance.ts` — MutationObserver structural detection + sweep scheduling.
 - `src/client/controls.ts` — the sync button's injection and the bulk sync.
+- `src/header-config.ts` — header namespace and Codex/Claude templates.
 - `src/client/presets.ts` — models.dev fetch, index, model-ID matching (`cn:` prefixes) and field mapping.
 - `src/client/locales.ts` — Chinese & English copy.
 - `src/client/enhance.module.css` — fallback button styles (follows the shell design tokens).
